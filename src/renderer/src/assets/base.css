@@ -1,0 +1,119 @@
+:root {
+  /* Core palette — black + gold */
+  --c-void: #050403;
+  --c-bg: #08070a;
+  --c-bg-soft: #0d0b0f;
+  --c-panel: rgba(18, 15, 12, 0.72);
+  --c-panel-border: rgba(212, 175, 55, 0.16);
+  --c-panel-border-strong: rgba(212, 175, 55, 0.32);
+
+  --c-gold: #d4af37;
+  --c-gold-bright: #f2d06b;
+  --c-gold-dim: #8a6f26;
+  --c-amber: #e0a63a;
+  --c-warm-white: #f5ecd8;
+
+  --c-text-1: rgba(245, 238, 224, 0.92);
+  --c-text-2: rgba(245, 238, 224, 0.6);
+  --c-text-3: rgba(245, 238, 224, 0.36);
+
+  --c-status-idle: rgba(245, 238, 224, 0.4);
+  --c-status-active: #6fe08a;
+  --c-status-working: #d4af37;
+
+  --font-sans:
+    'Inter',
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    Oxygen,
+    Ubuntu,
+    Cantarell,
+    'Helvetica Neue',
+    sans-serif;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  font-weight: normal;
+}
+
+ul {
+  list-style: none;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  min-height: 100vh;
+  color: var(--c-text-1);
+  background: var(--c-void);
+  line-height: 1.5;
+  font-family: var(--font-sans);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+  user-select: none;
+}
+
+input,
+textarea,
+button {
+  font-family: inherit;
+  user-select: text;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(212, 175, 55, 0.25);
+  border-radius: 8px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(212, 175, 55, 0.4);
+}
+
+.tracked-label {
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  font-size: 11px;
+  color: var(--c-text-2);
+  font-weight: 600;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+a {
+  color: var(--c-gold-bright);
+}
