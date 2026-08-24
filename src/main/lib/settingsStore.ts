@@ -176,4 +176,16 @@ class SettingsStore {
   }
 }
 
-export const settingsStore = new SettingsStore()
+// Lazily constructed: the constructor calls app.getPath('userData'), which depends on the
+// app name. Building this eagerly at module-import time would run before main/index.ts gets
+// a chance to call app.setName() — ES imports are hoisted ahead of all other statements
+// regardless of source order, so "call setName first" in index.ts doesn't actually help unless
+// nothing imported before it touches getPath(). A Proxy defers construction to first real use
+// (inside an IPC handler, always after app.whenReady()) without changing any call site.
+let _instance: SettingsStore | null = null
+export const settingsStore = new Proxy({} as SettingsStore, {
+  get(_target, prop, receiver) {
+    if (!_instance) _instance = new SettingsStore()
+    return Reflect.get(_instance, prop, receiver)
+  }
+})

@@ -5,6 +5,12 @@ import icon from '../../resources/icon.png?asset'
 import { registerIpcHandlers } from './ipc/handlers'
 import { attachWindow, stopVoiceSession } from './lib/geminiLive'
 
+// Belt-and-suspenders alongside the lazy singletons in settingsStore/agentStore: pin the app
+// name explicitly so userData resolves to the same %APPDATA%\dalve folder in dev and packaged
+// builds, rather than depending on package.json "name" auto-detection (which returned the
+// Electron default in at least one packaged build, silently starting users on a fresh profile).
+app.setName('dalve')
+
 function createWindow(): void {
   // Create the browser window.
   const mainWindow = new BrowserWindow({
@@ -51,7 +57,7 @@ function createWindow(): void {
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
   // Set app user model id for windows
-  electronApp.setAppUserModelId('com.electron')
+  electronApp.setAppUserModelId('me.dalve.app')
 
   // Default open or close DevTools by F12 in development
   // and ignore CommandOrControl + R in production.

@@ -137,4 +137,12 @@ class AgentStore {
   }
 }
 
-export const agentStore = new AgentStore()
+// Lazily constructed — see the matching comment in settingsStore.ts for why: the constructor
+// calls app.getPath('userData'), which must not run before main/index.ts sets the app name.
+let _instance: AgentStore | null = null
+export const agentStore = new Proxy({} as AgentStore, {
+  get(_target, prop, receiver) {
+    if (!_instance) _instance = new AgentStore()
+    return Reflect.get(_instance, prop, receiver)
+  }
+})
