@@ -1,6 +1,5 @@
 import {
   GoogleGenAI,
-  Environment,
   createUserContent,
   createModelContent,
   createPartFromFunctionCall,
@@ -10,31 +9,27 @@ import {
   type FunctionDeclaration,
   type Part
 } from '@google/genai'
-import { shell, type BrowserWindow } from 'electron'
+import type { BrowserWindow } from 'electron'
 import log from 'electron-log/main'
 import { settingsStore } from './settingsStore'
 import * as screenControl from './screenControl'
+import * as uiAutomation from './uiAutomation'
+import * as ocr from './ocr'
+import * as gridTargeting from './gridTargeting'
+import * as browserControl from './browserControl'
 import type { AutonomousTaskEvent } from '@shared/types'
 
 // A fast, cheap multimodal model for periodic polling — deliberately NOT the Live model, since
 // this runs on a timer independent of any live voice session. gemini-2.5-flash was retired by
 // Google (confirmed live via a 404 pointing here) — re-check availability periodically, same
 // caveat as LIVE_MODEL in geminiLive.ts: Google rotates these ids.
-//
-// Uses Gemini's `computer_use` built-in tool rather than a hand-defined click/type/key schema —
-// this is a real, purpose-trained action mode Google ships specifically for GUI screenshot
-// interaction (not a bigger general model), and it includes a genuine drag-and-drop gesture that
-// nothing in this codebase had before. Confirmed live and repeatedly that hand-guessed coordinates
-// from a general-purpose model were producing wrong-square/wrong-chat clicks no amount of tool
-// engineering on top could fix; this swaps the underlying decision-maker for one built for exactly
-// this job instead of continuing to patch the guessing itself.
 const POLL_MODEL = 'gemini-3.7-flash'
 const CHECK_INTERVAL_MS = 20_000
 const MAX_HISTORY = 10
-// Safety valve, not a normal ceiling: a real "click field, type, press enter" sequence takes
-// only a few rounds. This exists so a confused model can't loop forever burning API calls within
-// a single check instead of just calling finish_cycle and waiting for the next real observation.
-const MAX_ROUNDS_PER_TICK = 8
+// Safety valve, not a normal ceiling: a real "search, open chat, type, send" sequence takes only
+// a handful of rounds. Exists so a confused model can't loop forever burning API calls within a
+// single check instead of just calling finish_cycle and waiting for the next real observation.
+const MAX_ROUNDS_PER_TICK = 10
 
 let win: BrowserWindow | null = null
 export function attachWindow(window: BrowserWindow): void {
@@ -57,20 +52,124 @@ export function getGoal(): string | null {
   return currentGoal
 }
 
-// The only two signals computer_use's own predefined action set has no equivalent for — it
-// covers physical actions, not "are we done for now" / "is the whole goal complete."
+// --- Tool declarations, in explicit priority order ---
+// Real targeting priority, strongest to weakest — matches the same hierarchy given to the live
+// voice session in geminiLive.ts. The model is instructed (below, in the per-tick prompt) to try
+// them in this order rather than defaulting to the weakest one.
+const SPEED_SCHEMA = { type: 'string', enum: ['instant', 'visible'] } as const
+
+// Tier 2: real browser DOM control. Structurally cannot mis-click the browser's own toolbar/
+// tabs/profile button — those aren't part of the page a Playwright Page can see at all, which is
+// the exact, root-caused mechanism behind a real reported mistake (clicking Chrome's own account
+// button because it happened to share a name with the intended WhatsApp chat).
+const BROWSER_OPEN_TOOL: FunctionDeclaration = {
+  name: 'browser_open',
+  description:
+    "Opens a URL in DALVE's dedicated automation browser (separate window, persists logins across runs — WhatsApp Web etc. only need login once). STRONGLY PREFER this over any screen/coordinate tool for anything that's a website.",
+  parametersJsonSchema: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] }
+}
+const BROWSER_CLICK_TOOL: FunctionDeclaration = {
+  name: 'browser_click',
+  description: 'Clicks a real element by its actual visible text/label — genuine DOM lookup, not a coordinate guess. Reports back explicitly if multiple things match rather than picking one blind.',
+  parametersJsonSchema: { type: 'object', properties: { description: { type: 'string' } }, required: ['description'] }
+}
+const BROWSER_TYPE_TOOL: FunctionDeclaration = {
+  name: 'browser_type',
+  description: 'Clicks a field by its label/placeholder then types into it, so it actually has focus first.',
+  parametersJsonSchema: {
+    type: 'object',
+    properties: { fieldDescription: { type: 'string' }, text: { type: 'string' }, pressEnter: { type: 'boolean' } },
+    required: ['fieldDescription', 'text']
+  }
+}
+const BROWSER_READ_TEXT_TOOL: FunctionDeclaration = {
+  name: 'browser_read_text',
+  description: 'Real visible text of the current page (actual DOM, not OCR) — use to verify what really happened before deciding the next step.',
+  parametersJsonSchema: { type: 'object', properties: {} }
+}
+const BROWSER_EVALUATE_TOOL: FunctionDeclaration = {
+  name: 'browser_evaluate',
+  description:
+    "Runs read-only JavaScript in the current page and returns the result — for content with no accessible text/role at all but a real inspectable DOM (e.g. a chess board's pieces, which carry their position in element class names even though nothing is readable via normal text). Escape hatch: prefer browser_click/browser_type for anything with real text. Example: document.querySelectorAll('[class*=\"square\"]') style queries to read exact positions instead of guessing them visually.",
+  parametersJsonSchema: { type: 'object', properties: { script: { type: 'string', description: 'A JS expression to evaluate, e.g. "document.title" or a querySelectorAll + map returning plain data.' } }, required: ['script'] }
+}
+
+// Tier 3: native desktop accessibility (already built + live-tested earlier).
+const CLICK_ELEMENT_TOOL: FunctionDeclaration = {
+  name: 'click_element',
+  description: 'For native desktop apps (not websites): clicks something by its real OS accessibility name, trying real OCR automatically if that finds nothing.',
+  parametersJsonSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] }
+}
+
+// Tier 4: last resort — coordinate guessing / grid math for genuinely non-textual content.
+const CLICK_MOUSE_TOOL: FunctionDeclaration = {
+  name: 'click_mouse',
+  description: 'Clicks a raw pixel coordinate. Last resort only.',
+  parametersJsonSchema: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, speed: SPEED_SCHEMA }, required: ['x', 'y'] }
+}
+const DRAG_MOUSE_TOOL: FunctionDeclaration = {
+  name: 'drag_mouse',
+  description: 'A real press-move-release drag — for anything that needs an actual drag gesture, not two clicks (a chess piece on a canvas-rendered/non-web board, a slider).',
+  parametersJsonSchema: {
+    type: 'object',
+    properties: { fromX: { type: 'number' }, fromY: { type: 'number' }, toX: { type: 'number' }, toY: { type: 'number' }, speed: SPEED_SCHEMA },
+    required: ['fromX', 'fromY', 'toX', 'toY']
+  }
+}
+const TYPE_TEXT_TOOL: FunctionDeclaration = {
+  name: 'type_text',
+  description: 'Types literal text at the current OS-level focus. Only for non-browser content — use browser_type for websites.',
+  parametersJsonSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] }
+}
+const PRESS_KEY_TOOL: FunctionDeclaration = {
+  name: 'press_key',
+  description: 'Presses a single OS-level key.',
+  parametersJsonSchema: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] }
+}
+const DEFINE_GRID_TOOL: FunctionDeclaration = {
+  name: 'define_grid',
+  description: "Registers a non-web grid/board's pixel boundary once so click_grid_cell can click exact cells afterward instead of guessing each one.",
+  parametersJsonSchema: {
+    type: 'object',
+    properties: { label: { type: 'string' }, x: { type: 'number' }, y: { type: 'number' }, width: { type: 'number' }, height: { type: 'number' }, rows: { type: 'number' }, cols: { type: 'number' } },
+    required: ['label', 'x', 'y', 'width', 'height', 'rows', 'cols']
+  }
+}
+const CLICK_GRID_CELL_TOOL: FunctionDeclaration = {
+  name: 'click_grid_cell',
+  description: 'Clicks one exact cell of a previously-defined non-web grid by row/col (0-indexed from top-left as currently visible).',
+  parametersJsonSchema: { type: 'object', properties: { label: { type: 'string' }, row: { type: 'number' }, col: { type: 'number' } }, required: ['label', 'row', 'col'] }
+}
+
+// Control flow — the only two signals with no natural physical-action equivalent.
 const FINISH_CYCLE_TOOL: FunctionDeclaration = {
   name: 'finish_cycle',
   description:
-    'Call this when there is nothing further to do RIGHT NOW — e.g. you just sent a message and are waiting on a reply, or the screen genuinely has not changed since your last check. Ends this check only; the next automatic check runs in about 20 seconds. Do NOT call this mid-sequence (e.g. right after typing but before sending) — finish the whole sequence first.',
+    'Call when there is nothing further to do RIGHT NOW (e.g. just sent a message, waiting on a reply). Ends this check only; the next automatic check runs in ~20s. Never call mid-sequence.',
+  parametersJsonSchema: { type: 'object', properties: { narration: { type: 'string' } }, required: ['narration'] }
+}
+const MARK_TASK_COMPLETE_TOOL: FunctionDeclaration = {
+  name: 'mark_task_complete',
+  description: 'Call once the ENTIRE goal is fully accomplished — stops the background task completely.',
   parametersJsonSchema: { type: 'object', properties: { narration: { type: 'string' } }, required: ['narration'] }
 }
 
-const MARK_TASK_COMPLETE_TOOL: FunctionDeclaration = {
-  name: 'mark_task_complete',
-  description: 'Call this once the ENTIRE goal has been fully accomplished — stops the background task completely, not just this check.',
-  parametersJsonSchema: { type: 'object', properties: { narration: { type: 'string' } }, required: ['narration'] }
-}
+const ALL_TOOLS: FunctionDeclaration[] = [
+  BROWSER_OPEN_TOOL,
+  BROWSER_CLICK_TOOL,
+  BROWSER_TYPE_TOOL,
+  BROWSER_READ_TEXT_TOOL,
+  BROWSER_EVALUATE_TOOL,
+  CLICK_ELEMENT_TOOL,
+  CLICK_MOUSE_TOOL,
+  DRAG_MOUSE_TOOL,
+  TYPE_TEXT_TOOL,
+  PRESS_KEY_TOOL,
+  DEFINE_GRID_TOOL,
+  CLICK_GRID_CELL_TOOL,
+  FINISH_CYCLE_TOOL,
+  MARK_TASK_COMPLETE_TOOL
+]
 
 /**
  * Starts a background loop that watches the screen and acts on its own timer, independent of
@@ -82,6 +181,7 @@ export function startAutonomousTask(goal: string): void {
   if (timer) stopAutonomousTask('replaced by a new task')
   currentGoal = goal
   history = []
+  gridTargeting.clearGrids()
   screenControl.setControlGranted(true)
   emit({ type: 'started', goal })
   log.info(`[autonomousTask] started, goal="${goal}", log file: ${log.transports.file.getFile().path}`)
@@ -91,6 +191,7 @@ export function startAutonomousTask(goal: string): void {
       await tick(goal)
     } catch (err) {
       console.error('[autonomousTask] cycle failed:', err)
+      log.error('[autonomousTask] cycle failed:', err instanceof Error ? err.stack : err)
       emit({
         type: 'log',
         text: `Hit an error and will retry next cycle: ${err instanceof Error ? err.message : String(err)}`
@@ -119,88 +220,78 @@ function pushHistory(narration: string): void {
   emit({ type: 'log', text: narration })
 }
 
-/** computer_use reports coordinates normalized to a 0-999 space regardless of actual screen
- *  resolution — this is what converts them into the same real pixel space every other tool in
- *  this app already uses. */
-function denormalize(n: number, dimension: number): number {
-  return Math.round((n / 999) * dimension)
-}
-
-async function executeComputerUseAction(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const { width, height } = screenControl.getFrameSize()
-  const px = (v: unknown): number => denormalize(Number(v), width)
-  const py = (v: unknown): number => denormalize(Number(v), height)
-
+async function executeTool(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
   switch (name) {
-    case 'click':
-      await screenControl.clickMouse(px(args.x), py(args.y), 'left', false, 'visible')
-      return { result: 'clicked' }
-    case 'double_click':
-      await screenControl.clickMouse(px(args.x), py(args.y), 'left', true, 'visible')
-      return { result: 'double-clicked' }
-    case 'triple_click':
-      // No native triple-click — three quick clicks at the same point is the standard fallback
-      // (used for e.g. "select whole line" in text fields).
-      for (let i = 0; i < 3; i++) await screenControl.clickMouse(px(args.x), py(args.y), 'left', false, 'instant')
-      return { result: 'triple-clicked' }
-    case 'middle_click':
-      await screenControl.clickMouse(px(args.x), py(args.y), 'middle', false, 'visible')
-      return { result: 'middle-clicked' }
-    case 'right_click':
-      await screenControl.clickMouse(px(args.x), py(args.y), 'right', false, 'visible')
-      return { result: 'right-clicked' }
-    case 'move':
-      await screenControl.moveMouse(px(args.x), py(args.y), 'visible')
-      return { result: 'moved' }
-    case 'type':
-      screenControl.typeText(String(args.text ?? ''))
-      if (args.press_enter) screenControl.pressKey('enter')
-      return { result: 'typed' }
-    case 'drag_and_drop':
-      await screenControl.dragMouse(px(args.start_x), py(args.start_y), px(args.end_x), py(args.end_y), 'visible')
-      return { result: 'dragged' }
-    case 'wait': {
-      const seconds = Math.min(5, Math.max(0, Number(args.seconds) || 1))
-      await new Promise((r) => setTimeout(r, seconds * 1000))
-      return { result: `waited ${seconds}s` }
+    case 'browser_open': {
+      const info = await browserControl.openUrl(String(args.url ?? ''))
+      return { result: `Opened. title="${info.title}" url=${info.url}` }
     }
+    case 'browser_click':
+      return await browserControl.clickByDescription(String(args.description ?? ''))
+    case 'browser_type':
+      return await browserControl.typeIntoField(String(args.fieldDescription ?? ''), String(args.text ?? ''), Boolean(args.pressEnter))
+    case 'browser_read_text':
+      return { result: await browserControl.getVisibleText() }
+    case 'browser_evaluate': {
+      const result = await browserControl.evaluateInPage(String(args.script ?? ''))
+      return { result: JSON.stringify(result).slice(0, 4000) }
+    }
+    case 'click_element': {
+      const targetName = String(args.name ?? '').trim()
+      const uiResult = uiAutomation.isSupported() ? await uiAutomation.locateElement(targetName) : null
+      if (uiResult?.found && uiResult.centerX !== undefined && uiResult.centerY !== undefined) {
+        await screenControl.clickMouse(uiResult.centerX, uiResult.centerY, 'left', false, 'visible')
+        return { status: 'SUCCESS', result: `Clicked "${uiResult.element?.name}" via accessibility data.` }
+      }
+      const ocrResult = await ocr.locateText(targetName)
+      if (ocrResult.found && ocrResult.centerX !== undefined && ocrResult.centerY !== undefined) {
+        await screenControl.clickMouse(ocrResult.centerX, ocrResult.centerY, 'left', false, 'visible')
+        return { status: 'SUCCESS', result: `Clicked "${ocrResult.line?.text}" via OCR.` }
+      }
+      return { status: 'FAILED', error: `"${targetName}" wasn't found via accessibility data or OCR.` }
+    }
+    case 'click_mouse':
+      await screenControl.clickMouse(Number(args.x), Number(args.y), 'left', false, (args.speed as 'instant' | 'visible') ?? 'visible')
+      return { result: 'clicked' }
+    case 'drag_mouse':
+      await screenControl.dragMouse(Number(args.fromX), Number(args.fromY), Number(args.toX), Number(args.toY), (args.speed as 'instant' | 'visible') ?? 'visible')
+      return { result: 'dragged' }
+    case 'type_text':
+      screenControl.typeText(String(args.text ?? ''))
+      return { result: 'typed' }
     case 'press_key':
       screenControl.pressKey(String(args.key ?? ''))
       return { result: 'pressed' }
-    case 'hotkey': {
-      const keys = Array.isArray(args.keys) ? (args.keys as string[]) : []
-      if (keys.length === 0) return { error: 'no keys given' }
-      screenControl.pressKey(keys[keys.length - 1], keys.slice(0, -1))
-      return { result: 'pressed hotkey' }
+    case 'define_grid':
+      gridTargeting.defineGrid(String(args.label ?? '').trim(), {
+        x: Number(args.x),
+        y: Number(args.y),
+        width: Number(args.width),
+        height: Number(args.height),
+        rows: Math.max(1, Math.round(Number(args.rows))),
+        cols: Math.max(1, Math.round(Number(args.cols)))
+      })
+      return { result: 'grid registered' }
+    case 'click_grid_cell': {
+      const cell = gridTargeting.cellCenter(String(args.label ?? '').trim(), Math.round(Number(args.row)), Math.round(Number(args.col)))
+      if (!cell.found || cell.centerX === undefined || cell.centerY === undefined) {
+        return { status: 'FAILED', error: cell.error ?? 'Cell not found.' }
+      }
+      await screenControl.clickMouse(cell.centerX, cell.centerY, 'left', false, 'visible')
+      return { status: 'SUCCESS', result: `Clicked row ${args.row}, col ${args.col}.` }
     }
-    case 'take_screenshot':
-      // A fresh screenshot is already captured every round automatically — nothing extra to do.
-      return { result: 'ok' }
-    case 'scroll': {
-      const direction = String(args.direction ?? 'down')
-      const magnitude = Number(args.magnitude_in_pixels) || 200
-      const deltaY = direction === 'up' ? -magnitude : direction === 'down' ? magnitude : 0
-      const deltaX = direction === 'left' ? -magnitude : direction === 'right' ? magnitude : 0
-      screenControl.scroll(deltaX, deltaY)
-      return { result: 'scrolled' }
-    }
-    case 'navigate':
-      await shell.openExternal(String(args.url ?? ''))
-      return { result: 'navigated' }
-    case 'go_back':
-    case 'go_forward':
-      return { error: `"${name}" isn't available outside a dedicated browser-automation environment — use press_key with "alt" navigation keys, or click a visible back/forward button instead.` }
     default:
       return { error: `Unrecognized action "${name}".` }
   }
 }
 
 /**
- * One scheduled check (every ~20s) — but internally runs a bounded multi-step action loop so a
- * whole sequence (click a field, type a reply, press enter) completes in ONE check instead of
- * being spread across several 20-second-apart cycles with no memory of what already happened in
- * between. Each round re-captures the screen before deciding the next step, so the model can
- * actually see "I already typed this, I just need to send it" instead of re-guessing blind.
+ * One scheduled check (every ~20s) — but internally runs a bounded multi-step tool-calling loop
+ * so a whole sequence (open the site, search, click a chat, type a reply, send) completes in ONE
+ * check instead of being spread across several 20-second-apart cycles with no memory of what
+ * already happened. Each round re-captures the screen (for whatever isn't already covered by a
+ * browser_read_text call) before the next decision, so the model can verify what actually
+ * happened instead of assuming.
  */
 async function tick(goal: string): Promise<void> {
   const apiKey = settingsStore.getGeminiApiKey()
@@ -210,11 +301,14 @@ async function tick(goal: string): Promise<void> {
   }
   const ai = new GoogleGenAI({ apiKey })
 
-  const systemText = `You are DALVE, running a background task the user explicitly asked you to handle without them present: "${goal}". You have standing permission to act (click/type/press keys) on this specific task without asking for confirmation each time — but be conservative: never enter passwords/payment details/other credentials.
+  const systemText = `You are DALVE, running a background task the user explicitly asked you to handle without them present: "${goal}". You have standing permission to act without asking for confirmation each time — but be conservative: never enter passwords/payment details/other credentials.
 
-You can take SEVERAL actions in a row right now before this check ends — finish a whole sequence (e.g. click the message field, type your reply, press enter to send) rather than doing one micro-step and stopping. After every action you take, you'll see a fresh screenshot before your next decision — actually look at it to confirm the action did what you expected (the text really appears in the field, the message really sent, the piece really moved) before moving on or claiming it worked. Call finish_cycle once there's genuinely nothing further to do until the next automatic check (e.g. you sent something and are waiting on a reply) — never call it mid-sequence. Call mark_task_complete only once the ENTIRE goal is fully done, not just this check.
+Real targeting priority, strongest to weakest — always use the strongest one that applies:
+1. browser_open + browser_click/browser_type/browser_read_text/browser_evaluate for ANYTHING that's a website (WhatsApp Web included). This is real DOM lookup by actual text, not a coordinate guess, running in DALVE's own dedicated automation browser (separate from the screenshot below) — it cannot mis-click a browser's own toolbar/tabs/account button, since that browser has no visible chrome for it to ever address. If a site needs login (e.g. WhatsApp Web's QR code) the user needs to do that once in that window — say so plainly if you hit a login wall you can't get past yourself.
+2. click_element for native desktop apps (not websites) with a visible label.
+3. click_mouse/drag_mouse/define_grid+click_grid_cell from the screenshot below — last resort, for genuinely non-web, non-textual content only (a game, a drawing canvas).
 
-For anything drag-based (a chess/checkers piece, a slider, a reorderable list item) use the drag_and_drop action — a real press-move-release gesture — rather than two separate clicks, which does nothing on sites that only respond to an actual drag.
+You can take SEVERAL actions in a row right now before this check ends — finish a whole sequence rather than doing one micro-step and stopping. Actually check the result of each action (browser_read_text, or the next screenshot) before claiming something worked. Call finish_cycle once there's genuinely nothing further to do until the next check — never mid-sequence. Call mark_task_complete only once the ENTIRE goal is done.
 
 Recent history of this task:\n${history.length > 0 ? history.join('\n') : '(nothing yet)'}`
 
@@ -224,30 +318,16 @@ Recent history of this task:\n${history.length > 0 ? history.join('\n') : '(noth
   const contents: Content[] = [createUserContent([{ text: systemText }, createPartFromBase64(firstShot, 'image/jpeg')])]
 
   for (let round = 0; round < MAX_ROUNDS_PER_TICK; round++) {
-    log.info(`[autonomousTask] round ${round}: calling ${POLL_MODEL} with computer_use tool`)
+    log.info(`[autonomousTask] round ${round}: calling ${POLL_MODEL}`)
     let response
     try {
       response = await ai.models.generateContent({
         model: POLL_MODEL,
         contents,
-        config: {
-          tools: [
-            { computerUse: { environment: Environment.ENVIRONMENT_DESKTOP } },
-            { functionDeclarations: [FINISH_CYCLE_TOOL, MARK_TASK_COMPLETE_TOOL] }
-          ]
-        }
+        config: { tools: [{ functionDeclarations: ALL_TOOLS }] }
       })
     } catch (err) {
-      // Deliberately dumping every own property, not just .message — SDK/API errors often carry
-      // the actual rejection reason (e.g. "these tools cannot be combined") in a nested field
-      // that .message alone won't show, and guessing at the cause instead of reading it is
-      // exactly the trap this logging exists to avoid.
       log.error('[autonomousTask] generateContent threw:', err instanceof Error ? err.stack : err)
-      try {
-        log.error('[autonomousTask] full error object:', JSON.stringify(err, Object.getOwnPropertyNames(err as object)))
-      } catch {
-        // some error shapes don't survive JSON.stringify — the .stack log above already covers it
-      }
       throw err
     }
 
@@ -255,8 +335,7 @@ Recent history of this task:\n${history.length > 0 ? history.join('\n') : '(noth
     log.info(
       `[autonomousTask] round ${round} response: functionCalls=${calls ? calls.length : 0}` +
         (calls?.length ? ` names=[${calls.map((c) => c.name).join(', ')}]` : '') +
-        (response.text ? ` text="${response.text.slice(0, 300)}"` : '') +
-        (response.candidates?.[0]?.finishReason ? ` finishReason=${response.candidates[0].finishReason}` : '')
+        (response.text ? ` text="${response.text.slice(0, 300)}"` : '')
     )
 
     if (!calls || calls.length === 0) {
@@ -284,14 +363,13 @@ Recent history of this task:\n${history.length > 0 ? history.join('\n') : '(noth
       log.info(`[autonomousTask] executing ${callName} args=${JSON.stringify(callArgs)}`)
       let result: Record<string, unknown>
       try {
-        result = await executeComputerUseAction(callName, callArgs)
+        result = await executeTool(callName, callArgs)
       } catch (err) {
         result = { error: err instanceof Error ? err.message : String(err) }
         log.error(`[autonomousTask] ${callName} threw:`, err)
       }
-      log.info(`[autonomousTask] ${callName} result=${JSON.stringify(result)}`)
-      const intent = typeof callArgs.intent === 'string' ? callArgs.intent : ''
-      pushHistory(`${callName}${intent ? ` (${intent})` : ''} -> ${JSON.stringify(result)}`)
+      log.info(`[autonomousTask] ${callName} result=${JSON.stringify(result).slice(0, 500)}`)
+      pushHistory(`${callName}(${JSON.stringify(callArgs).slice(0, 200)}) -> ${JSON.stringify(result).slice(0, 300)}`)
       responseParts.push(createPartFromFunctionResponse(call.id ?? callName, callName, result))
     }
 

@@ -17,6 +17,7 @@ import * as appControl from './appControl'
 import * as uiAutomation from './uiAutomation'
 import * as ocr from './ocr'
 import * as gridTargeting from './gridTargeting'
+import * as browserControl from './browserControl'
 import * as journal from './journal'
 import type { AgentConfig, VoiceEvent } from '@shared/types'
 
@@ -45,7 +46,7 @@ The only hard limit: never type a password, payment card number, or other creden
 
 Screen sharing only ever watches the user's main/primary monitor — if something they mention isn't visible there, it may be on a different monitor you can't see; say so rather than guessing or clicking blind.
 
-click_element is your default click tool on both Windows and macOS for anything with a visible label — buttons, links, menu items, tabs, form fields, icon-only nav links included. It already tries accessibility data AND real OCR internally before giving up, so you don't need to chain tools yourself. If click_element ever errors outright on macOS, the most likely cause is DALVE not yet having Accessibility permission granted in System Settings — say so plainly so the user can fix it, rather than silently downgrading to coordinates without explaining why.
+Real targeting priority, strongest to weakest — always prefer the strongest one that applies: (1) A direct integration tool (Composio/MCP) if one exists for what's being asked — check before touching any UI at all. (2) browser_open + browser_click/browser_type/browser_read_text for ANYTHING that's a website — WhatsApp Web, any web app. This is real DOM lookup by actual text/label, running in DALVE's own dedicated automation browser; it cannot ever accidentally click the browser's own toolbar/tabs/profile button, because that browser has none visible and the tool has no way to address them even if it did — confirmed root cause of a real repeated mistake (clicking Chrome's own account button because it happened to share a name with the real target) that this structurally can't reproduce. (3) click_element for native desktop apps with a visible label — reads the OS accessibility tree, falls back to OCR internally, no need to chain tools yourself. (4) click_mouse/move_mouse from the video feed — last resort, for genuinely non-textual, non-web content only (a game, a drawing canvas, a map). If click_element ever errors outright on macOS, the most likely cause is DALVE not yet having Accessibility permission granted in System Settings — say so plainly.
 
 For grid/board content specifically — chess/checkers boards, sudoku, spreadsheets, calendars, minesweeper, anything laid out as uniform rows/columns — go straight to define_grid + click_grid_cell rather than trying click_element or click_text first. Confirmed via real testing: a chess board's squares and pieces are pure graphics with zero accessible name and zero readable text, so those tools will just fail there every time and waste a step. Call define_grid ONCE per game/session with your best visual estimate of the whole grid's outer boundary (a big, forgiving target), then click_grid_cell for every individual move after that — it computes the exact position mathematically instead of you re-guessing a small target from scratch each time. If a click still lands wrong, call define_grid again with a corrected boundary rather than continuing to guess with the same one. Many drag-to-move interfaces (chess/checkers pieces especially) don't respond to two separate clicks at all — if a piece doesn't visibly move after clicking its square then the destination, that's the signal to try drag_mouse (piece's cell center to destination cell center) instead of repeating the same click sequence. Genuinely non-textual, non-grid content with no label at all (a drawing canvas, a map, a free-form game) is the actual last resort for click_mouse/move_mouse.
 
@@ -221,6 +222,54 @@ const DRAG_MOUSE_TOOL: FunctionDeclaration = {
     },
     required: ['fromX', 'fromY', 'toX', 'toY']
   }
+}
+
+const BROWSER_OPEN_TOOL: FunctionDeclaration = {
+  name: 'browser_open',
+  description:
+    "Opens a URL in DALVE's OWN dedicated automation browser window — separate from screen sharing and from the user's regular browser. STRONGLY PREFER this over open_url/screen control for any site where you'll need to click things or read content (WhatsApp Web, any web app) — everything done in this browser after opening is real DOM-level control (browser_click/browser_type/browser_read_text), not coordinate guessing, and it's structurally immune to the 'clicked the browser's own toolbar instead of the page' class of mistake since this browser has no visible toolbar/tabs/profile button for it to ever click by accident. Logins persist across launches — the first time on a given site (e.g. WhatsApp Web's QR code) needs the user to actually do that once in this window; after that it stays signed in.",
+  parametersJsonSchema: {
+    type: 'object',
+    properties: { url: { type: 'string', description: 'Full URL, including https://' } },
+    required: ['url']
+  }
+}
+
+const BROWSER_CLICK_TOOL: FunctionDeclaration = {
+  name: 'browser_click',
+  description:
+    "Clicks a real element in DALVE's automation browser by its actual visible text/label/role (e.g. \"Ali\", \"Send\", \"Search\") — a genuine DOM lookup, not a coordinate guess. If multiple things match, this reports that back explicitly rather than picking one blind — read the response and be more specific rather than repeating the same query.",
+  parametersJsonSchema: {
+    type: 'object',
+    properties: { description: { type: 'string', description: 'The visible text/label of what to click.' } },
+    required: ['description']
+  }
+}
+
+const BROWSER_TYPE_TOOL: FunctionDeclaration = {
+  name: 'browser_type',
+  description: 'Clicks a field by its label/placeholder (e.g. "Search or start a new chat", "Type a message") then types into it — so it actually has focus first, same as the OS-level tools.',
+  parametersJsonSchema: {
+    type: 'object',
+    properties: {
+      fieldDescription: { type: 'string', description: 'The field\'s visible label or placeholder text.' },
+      text: { type: 'string' },
+      pressEnter: { type: 'boolean', description: 'Press Enter after typing, e.g. to send a message.' }
+    },
+    required: ['fieldDescription', 'text']
+  }
+}
+
+const BROWSER_READ_TEXT_TOOL: FunctionDeclaration = {
+  name: 'browser_read_text',
+  description: "Returns the real visible text of the current page in DALVE's automation browser — actual DOM content, not OCR. Use this to check what's really on the page (e.g. did a message actually appear, what conversations are listed) before deciding the next action.",
+  parametersJsonSchema: { type: 'object', properties: {} }
+}
+
+const BROWSER_PRESS_KEY_TOOL: FunctionDeclaration = {
+  name: 'browser_press_key',
+  description: "Presses a key in DALVE's automation browser (e.g. \"Enter\", \"Escape\").",
+  parametersJsonSchema: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] }
 }
 
 const FIND_ELEMENTS_TOOL: FunctionDeclaration = {
@@ -465,6 +514,11 @@ async function buildToolsForAgent(agent: AgentConfig | null): Promise<Tool[]> {
     MOVE_MOUSE_TOOL,
     CLICK_MOUSE_TOOL,
     DRAG_MOUSE_TOOL,
+    BROWSER_OPEN_TOOL,
+    BROWSER_CLICK_TOOL,
+    BROWSER_TYPE_TOOL,
+    BROWSER_READ_TEXT_TOOL,
+    BROWSER_PRESS_KEY_TOOL,
     FIND_ELEMENTS_TOOL,
     CLICK_ELEMENT_TOOL,
     READ_SCREEN_TEXT_TOOL,
@@ -873,6 +927,22 @@ async function handleToolCalls(functionCalls: FunctionCall[]): Promise<void> {
           (args.speed as 'instant' | 'visible') ?? 'visible'
         )
         response = { result: 'Dragged.' }
+      } else if (fc.name === 'browser_open') {
+        const info = await browserControl.openUrl(String(args.url ?? ''))
+        response = { result: `Opened. title="${info.title}" url=${info.url}` }
+      } else if (fc.name === 'browser_click') {
+        response = await browserControl.clickByDescription(String(args.description ?? ''))
+      } else if (fc.name === 'browser_type') {
+        response = await browserControl.typeIntoField(
+          String(args.fieldDescription ?? ''),
+          String(args.text ?? ''),
+          Boolean(args.pressEnter)
+        )
+      } else if (fc.name === 'browser_read_text') {
+        response = { result: await browserControl.getVisibleText() }
+      } else if (fc.name === 'browser_press_key') {
+        await browserControl.pressKey(String(args.key ?? ''))
+        response = { result: 'Pressed.' }
       } else if (fc.name === 'find_elements') {
         if (!uiAutomation.isSupported()) {
           response = { error: 'UI element reading is not implemented on this platform — use the video feed and move_mouse/click_mouse instead.' }

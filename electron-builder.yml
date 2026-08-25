@@ -9,6 +9,11 @@ files:
   - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  # Playwright's actual browser binary lives outside node_modules by default and isn't part of
+  # electron-builder's normal file selection at all — without this, browser_open/browser_click
+  # would work in `npm run dev` (which uses the local machine's own Playwright cache) but be
+  # silently unusable in the installed app, since there'd be no browser for it to launch.
+  - playwright-browsers/**/*
 asarUnpack:
   - resources/**
   - node_modules/robotjs/**
@@ -16,6 +21,9 @@ asarUnpack:
   # class of problem robotjs had — so it needs to live outside the asar archive too.
   - node_modules/tesseract.js/**
   - node_modules/tesseract.js-core/**
+  # A real browser executable can't run from inside an asar archive any more than robotjs's
+  # native addon could.
+  - playwright-browsers/**
 win:
   executableName: DALVE
 nsis:

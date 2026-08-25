@@ -7,3 +7,6 @@ out
 .claude
 # tesseract.js downloads/caches its language model here on first OCR use
 *.traineddata
+# Downloaded by scripts/install-playwright-browsers.js (postinstall) — a ~400MB binary,
+# regenerated on every fresh install/CI run, never something to commit.
+playwright-browsers
