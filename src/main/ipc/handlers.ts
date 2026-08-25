@@ -27,6 +27,15 @@ export function registerIpcHandlers(): void {
     return settingsStore.getState()
   })
 
+  // Manual device-to-device key transfer: read this on the device that HAS the key (DevTools
+  // console -> `await window.dalve.settings.getRawKeys()`), paste the values into the Settings
+  // screen on the device that doesn't. Exists because cloud sync of these two fields needs a
+  // Supabase schema change the user has to apply by hand first — this works regardless of that.
+  ipcMain.handle('settings:getRawKeys', () => ({
+    geminiApiKey: settingsStore.getGeminiApiKey() ?? null,
+    composioApiKey: settingsStore.getComposioApiKey() ?? null
+  }))
+
   ipcMain.handle('settings:setDalveVoice', (_e, voice: string) => {
     settingsStore.setDalveVoice(voice)
     return settingsStore.getState()
