@@ -5,9 +5,15 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+# The default GITHUB_TOKEN is read-only unless explicitly granted write access — without this,
+# the release-publish step fails with a permissions error even though the build itself succeeds.
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
+      fail-fast: false # one platform's release-publish hiccup shouldn't cancel the other's build
       matrix:
         include:
           - os: windows-latest
