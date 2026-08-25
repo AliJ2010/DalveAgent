@@ -19,21 +19,20 @@ export interface UiElement {
   isOffscreen: boolean
 }
 
-// Windows UI Automation via PowerShell/.NET (System.Windows.Automation) — this is the real
-// replacement for coordinate-guessing: it reads the OS's own accessibility tree for whatever
-// window is actually frontmost right now, so DALVE gets real element names and positions
-// instead of the model guessing pixel coordinates off a screenshot. Written to a temp .ps1 file
-// and run with -File rather than -Command, since embedding a multi-line script with quotes and
-// braces into a single command-line string is exactly the kind of escaping that broke the
-// earlier $pid PowerShell bug — a real file sidesteps that whole class of problem.
+// --- Windows: PowerShell + .NET UI Automation (System.Windows.Automation) ---
+// Reads the OS's own accessibility tree for whatever window is actually frontmost right now.
+// Written to a temp .ps1 file and run with -File rather than -Command, since embedding a
+// multi-line script with quotes and braces into a single command-line string is exactly the kind
+// of escaping that broke the earlier $pid PowerShell bug — a real file sidesteps that class of
+// problem. Verified live, multiple rounds, against real complex apps (Chrome, DALVE itself).
 //
 // Output is base64-per-field, one element per line, NOT ConvertTo-Json — found live that
-// PowerShell's ConvertTo-Json genuinely fails to escape some real-world content: a WhatsApp-style
-// element whose name itself contained a literal double-quote character came out as broken JSON.
-// Base64's alphabet never includes a quote, a pipe, or a newline, so it can never collide with
-// the "|" field separator or the newline record separator, regardless of what arbitrary text a
-// target app puts in its own UI.
-const ENUM_SCRIPT = [
+// PowerShell's ConvertTo-Json genuinely fails to escape some real-world content: an element name
+// containing a literal double-quote (a real WhatsApp-style status text) produced structurally
+// invalid JSON. Base64's alphabet never includes a quote, a pipe, or a newline, so it can never
+// collide with the "|" field separator or the newline record separator, regardless of what
+// arbitrary text a target app puts in its own UI.
+const WIN_ENUM_SCRIPT = [
   'Add-Type -AssemblyName UIAutomationClient',
   'Add-Type -AssemblyName UIAutomationTypes',
   'Add-Type @"',
@@ -103,7 +102,7 @@ function b64decode(s: string): string {
   return Buffer.from(s, 'base64').toString('utf-8')
 }
 
-function parseLine(line: string): UiElement | null {
+function parseWinLine(line: string): UiElement | null {
   const parts = line.split('|')
   if (parts.length < 10) return null
   const [nameB64, controlTypeB64, autoIdB64, classNameB64, x, y, w, h, enabled, offscreen] = parts
@@ -121,6 +120,115 @@ function parseLine(line: string): UiElement | null {
   }
 }
 
+async function findElementsWindows(): Promise<UiElement[]> {
+  const stdout = await runPowerShellScript(WIN_ENUM_SCRIPT)
+  const trimmed = stdout.trim()
+  if (!trimmed) return []
+  return trimmed
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map(parseWinLine)
+    .filter((e): e is UiElement => e !== null)
+}
+
+// --- macOS: JXA (JavaScript for Automation) + System Events UI scripting ---
+// UNVERIFIED — written with no way to run or test it (no Mac access at all). Uses the same
+// architecture and output contract as the Windows path (same UiElement shape, same scoring/
+// locate logic below) so fixing it once real Mac testing surfaces bugs should be a small, local
+// change rather than a redesign. Requires the user to grant DALVE Accessibility permission
+// (System Settings -> Privacy & Security -> Accessibility) — System Events UI scripting simply
+// returns nothing/errors without it, which is a real macOS permission gate, not a bug.
+const MAC_ENUM_SCRIPT = `
+function run() {
+  var se = Application('System Events')
+  var results = []
+  var MAX_DEPTH = 20
+  var MAX_ELEMENTS = 500
+
+  function safeGet(fn, fallback) {
+    try { return fn() } catch (e) { return fallback }
+  }
+
+  function walk(el, depth) {
+    if (results.length >= MAX_ELEMENTS || depth > MAX_DEPTH) return
+    var name = safeGet(function () { return el.name() }, '') ||
+               safeGet(function () { return el.title() }, '') ||
+               safeGet(function () { return el.value() }, '')
+    var role = safeGet(function () { return el.role() }, '')
+    var pos = safeGet(function () { return el.position() }, null)
+    var size = safeGet(function () { return el.size() }, null)
+    var enabled = safeGet(function () { return el.enabled() }, true)
+    if (name && String(name).length > 0 && pos && size) {
+      results.push({
+        name: String(name),
+        role: String(role),
+        x: Math.round(pos[0]),
+        y: Math.round(pos[1]),
+        width: Math.round(size[0]),
+        height: Math.round(size[1]),
+        enabled: !!enabled
+      })
+    }
+    var children = safeGet(function () { return el.uiElements() }, [])
+    for (var i = 0; i < children.length && results.length < MAX_ELEMENTS; i++) {
+      walk(children[i], depth + 1)
+    }
+  }
+
+  var proc = safeGet(function () { return se.processes.whose({ frontmost: true })[0] }, null)
+  if (!proc) return JSON.stringify([])
+
+  var windows = safeGet(function () { return proc.windows() }, [])
+  for (var w = 0; w < windows.length; w++) walk(windows[w], 0)
+
+  return JSON.stringify(results)
+}
+`.trim()
+
+async function runJxaScript(script: string, timeoutMs = 15000): Promise<string> {
+  const scriptPath = join(tmpdir(), `dalve-uia-${Date.now()}-${Math.floor(Math.random() * 1e6)}.js`)
+  writeFileSync(scriptPath, script, 'utf-8')
+  try {
+    const { stdout } = await execFileAsync('osascript', ['-l', 'JavaScript', scriptPath], {
+      timeout: timeoutMs,
+      maxBuffer: 20 * 1024 * 1024
+    })
+    return stdout
+  } finally {
+    try {
+      unlinkSync(scriptPath)
+    } catch {
+      // best-effort cleanup only
+    }
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function normalizeMacElement(e: any): UiElement {
+  return {
+    name: String(e.name ?? ''),
+    controlType: String(e.role ?? ''),
+    automationId: '',
+    className: String(e.role ?? ''),
+    x: Number(e.x) || 0,
+    y: Number(e.y) || 0,
+    width: Number(e.width) || 0,
+    height: Number(e.height) || 0,
+    isEnabled: e.enabled !== false,
+    isOffscreen: false
+  }
+}
+
+async function findElementsMac(): Promise<UiElement[]> {
+  const stdout = await runJxaScript(MAC_ENUM_SCRIPT)
+  const trimmed = stdout.trim()
+  if (!trimmed) return []
+  const parsed = JSON.parse(trimmed)
+  const arr = Array.isArray(parsed) ? parsed : []
+  return arr.map(normalizeMacElement)
+}
+
 /**
  * Enumerates every named, currently-rendered element of the frontmost window right now — a
  * fresh live read every call, never a cached/remembered layout. This is what lets DALVE answer
@@ -129,24 +237,15 @@ function parseLine(line: string): UiElement | null {
  * Chromium/Electron windows (Chrome, and Electron apps that haven't forced accessibility on)
  * build their full accessibility tree lazily — the FIRST query against one right after it gains
  * focus can come back nearly empty, then enrich on a follow-up query moments later once Chromium
- * notices a real UI Automation client is actively watching. Confirmed live: DALVE's own window
- * went from 1 element to a full tree on a second query ~1.5s after the first. Callers that get a
- * suspiciously sparse result back should retry once after a short delay rather than assuming the
- * window has nothing to offer — see findElementsReliable.
+ * notices a real UI Automation client is actively watching. Confirmed live on Windows: DALVE's
+ * own window went from 1 element to a full tree on a second query ~1.5s after the first. Callers
+ * that get a suspiciously sparse result back should retry once after a short delay rather than
+ * assuming the window has nothing to offer — see findElementsReliable.
  */
 export async function findElements(): Promise<UiElement[]> {
-  if (process.platform !== 'win32') {
-    throw new Error('UI element targeting is only implemented for Windows so far.')
-  }
-  const stdout = await runPowerShellScript(ENUM_SCRIPT)
-  const trimmed = stdout.trim()
-  if (!trimmed) return []
-  return trimmed
-    .split('\n')
-    .map((l) => l.trim())
-    .filter(Boolean)
-    .map(parseLine)
-    .filter((e): e is UiElement => e !== null)
+  if (process.platform === 'win32') return findElementsWindows()
+  if (process.platform === 'darwin') return findElementsMac()
+  throw new Error(`UI element targeting isn't implemented for ${process.platform}.`)
 }
 
 /**
@@ -218,5 +317,5 @@ export async function locateElement(targetName: string): Promise<LocateResult> {
 }
 
 export function isSupported(): boolean {
-  return process.platform === 'win32'
+  return process.platform === 'win32' || process.platform === 'darwin'
 }

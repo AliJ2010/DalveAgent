@@ -42,7 +42,7 @@ The only hard limit: never type a password, payment card number, or other creden
 
 Screen sharing only ever watches the user's main/primary monitor — if something they mention isn't visible there, it may be on a different monitor you can't see; say so rather than guessing or clicking blind.
 
-On Windows, you have a real targeting priority order — always try them in this sequence, never skip straight to guessing pixel coordinates: (1) click_element — reads the real OS accessibility tree and clicks the actual live position of a named element, re-checked fresh at the moment of the click; this is correct for essentially anything with a visible label (buttons, links, menu items, tabs, form fields). (2) click_text — real OCR on the actual rendered pixels, for content with no accessible name (canvas UI, video/subtitle text, an image containing text). (3) click_mouse/move_mouse from the video feed — last resort only, for genuinely non-textual content (a game, a drawing canvas, a map). Use find_elements or read_screen_text first whenever you're not certain of an exact name/text — they cost nothing and tell you what's really there instead of you guessing. macOS doesn't have click_element yet (falls straight to click_text, then click_mouse).
+You have a real targeting priority order on both Windows and macOS — always try them in this sequence, never skip straight to guessing pixel coordinates: (1) click_element — reads the real OS accessibility tree (Windows UI Automation / macOS Accessibility API) and clicks the actual live position of a named element, re-checked fresh at the moment of the click; this is correct for essentially anything with a visible label (buttons, links, menu items, tabs, form fields). (2) click_text — real OCR on the actual rendered pixels, for content with no accessible name (canvas UI, video/subtitle text, an image containing text). (3) click_mouse/move_mouse from the video feed — last resort only, for genuinely non-textual content (a game, a drawing canvas, a map). Use find_elements or read_screen_text first whenever you're not certain of an exact name/text — they cost nothing and tell you what's really there instead of you guessing. If click_element ever errors outright on macOS, the most likely cause is DALVE not yet having Accessibility permission granted in System Settings — say so plainly so the user can fix it, rather than silently downgrading to coordinates without explaining why.
 
 Clicking the wrong thing (e.g. the wrong contact in a chat list, the wrong item in a similar-looking row) is the single most common way you fail at this — the video feed is compressed and small text is easy to misread, so never click from a single glance when you're relying on pixel coordinates. Before a coordinate-based click where similar-looking rows could be confused, quickly move_mouse there first — that's free — and confirm in the next frame that the cursor actually landed on the right element before you click_mouse; skip this check when using click_element (it's already precise) or when the target is obvious and unambiguous. If a click turns out to have hit the wrong thing, say so immediately and correct it rather than continuing as if it worked. When a task spans multiple turns (e.g. "keep this conversation going without me"), re-check the screen state at the start of each new step rather than assuming it still matches what you last saw — things move, replies arrive, windows change focus.
 
@@ -204,14 +204,14 @@ const CLICK_MOUSE_TOOL: FunctionDeclaration = {
 const FIND_ELEMENTS_TOOL: FunctionDeclaration = {
   name: 'find_elements',
   description:
-    "Reads the REAL, currently-focused window's accessibility tree and returns every named, clickable/interactive element on it right now — its exact name, type, and whether it's enabled. This is not a guess from a screenshot; it's the same data the OS itself uses. Call this before click_element when you're not certain of an element's exact name, or when the video feed is ambiguous/compressed. Windows only for now — on other platforms this will fail and you should fall back to move_mouse/click_mouse from the video feed instead.",
+    "Reads the REAL, currently-focused window's accessibility tree (Windows UI Automation / macOS Accessibility API) and returns every named, clickable/interactive element on it right now — its exact name, type, and whether it's enabled. This is not a guess from a screenshot; it's the same data the OS itself uses. Call this before click_element when you're not certain of an element's exact name, or when the video feed is ambiguous/compressed. On macOS this requires the user to have granted DALVE Accessibility permission (System Settings -> Privacy & Security -> Accessibility) — if it errors, tell them that plainly rather than silently falling back.",
   parametersJsonSchema: { type: 'object', properties: {} }
 }
 
 const CLICK_ELEMENT_TOOL: FunctionDeclaration = {
   name: 'click_element',
   description:
-    "Clicks a UI element by its real accessibility name (e.g. \"Send\", \"Reply\", \"Address and search bar\") instead of a guessed pixel coordinate. This re-reads the OS accessibility tree fresh at the moment of the call and clicks the actual live position of the best-matching element — so it can't go stale between when you saw something and when you act on it, and it can't miss due to compressed/small video. STRONGLY PREFER this over click_mouse for anything with a visible label (buttons, links, menu items, tabs, text fields) — reserve click_mouse for canvas/custom-rendered content with no accessible name (games, drawing surfaces, custom video controls). If no good match is found, the response lists the real names actually present so you can retry correctly instead of guessing again. Windows only for now — falls back to click_mouse on other platforms.",
+    "Clicks a UI element by its real accessibility name (e.g. \"Send\", \"Reply\", \"Address and search bar\") instead of a guessed pixel coordinate. This re-reads the OS accessibility tree fresh at the moment of the call and clicks the actual live position of the best-matching element — so it can't go stale between when you saw something and when you act on it, and it can't miss due to compressed/small video. STRONGLY PREFER this over click_mouse for anything with a visible label (buttons, links, menu items, tabs, text fields) — reserve click_mouse for canvas/custom-rendered content with no accessible name (games, drawing surfaces, custom video controls). If no good match is found, the response lists the real names actually present so you can retry correctly instead of guessing again.",
   parametersJsonSchema: {
     type: 'object',
     properties: {
@@ -800,7 +800,7 @@ async function handleToolCalls(functionCalls: FunctionCall[]): Promise<void> {
         response = { result: 'Clicked.' }
       } else if (fc.name === 'find_elements') {
         if (!uiAutomation.isSupported()) {
-          response = { error: 'UI element reading is only implemented for Windows so far — use the video feed and move_mouse/click_mouse instead.' }
+          response = { error: 'UI element reading is not implemented on this platform — use the video feed and move_mouse/click_mouse instead.' }
         } else {
           const elements = await uiAutomation.findElementsReliable()
           response = {
@@ -813,7 +813,7 @@ async function handleToolCalls(functionCalls: FunctionCall[]): Promise<void> {
       } else if (fc.name === 'click_element') {
         const targetName = String(args.name ?? '').trim()
         if (!uiAutomation.isSupported()) {
-          response = { error: 'UI element clicking is only implemented for Windows so far — use click_mouse from the video feed instead.' }
+          response = { error: 'UI element clicking is not implemented on this platform — use click_mouse from the video feed instead.' }
         } else if (!targetName) {
           response = { error: 'No element name given.' }
         } else {
