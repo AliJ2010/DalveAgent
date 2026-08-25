@@ -34,3 +34,21 @@ jobs:
             dist/*.dmg
             dist/*.zip
           if-no-files-found: ignore
+
+      # Publishes straight to a permanent public "latest" release on every push — this is what
+      # makes it a real download link instead of something only reachable via `gh`/API auth.
+      # Both OS jobs upload to the SAME release tag; action-gh-release adds to an existing
+      # release's assets rather than replacing the whole thing, so Windows and Mac builds don't
+      # clobber each other.
+      - name: Publish to latest release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: DALVE
+          prerelease: true
+          files: |
+            dist/*.exe
+            dist/*.dmg
+            dist/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
