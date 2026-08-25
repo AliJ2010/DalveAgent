@@ -41,6 +41,21 @@ jobs:
       # package.json by hand. This only edits the ephemeral CI checkout, never the repo.
       - run: npm pkg set version=0.1.${{ github.run_number }}
 
+      # electron-builder uploads the installer and its .blockmap concurrently, and each upload
+      # independently checks "does the release exist yet?" — when both check at once and both
+      # get "no", both try to create it and the loser gets a 422 ("Published releases must have
+      # a valid tag"), which killed the whole publish step even though the actual build was fine.
+      # Pre-creating the release means that check always finds "yes" instead, so there's nothing
+      # left to race over. `|| true` because this legitimately fails on the second OS in the
+      # matrix once the first one has already created it — that's expected, not an error.
+      - name: Ensure GitHub release exists for this version
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          gh release create "v$VERSION" --title "DALVE $VERSION" --notes "Automated build" || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       # electron-builder's own --publish (not a separate upload action) is what makes real
       # auto-update possible: it creates/updates a proper versioned GitHub release AND generates
       # the latest.yml / latest-mac.yml update-feed files electron-updater reads. Both OS jobs
