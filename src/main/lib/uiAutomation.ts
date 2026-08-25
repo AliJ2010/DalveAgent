@@ -280,6 +280,12 @@ export interface LocateResult {
   /** Populated only when not found — real names actually present, so DALVE can self-correct
    *  instead of guessing again blindly. */
   candidates?: string[]
+  /** How many OTHER elements also matched as well as the one picked — a real ambiguity signal.
+   *  Found live: a generic query like "Play" can match both a small nav icon and a large CTA
+   *  button; without this, ties always silently favored whichever was found first (nav items,
+   *  since they're earlier in reading order), which is exactly why "click the button at the
+   *  bottom" kept hitting the one at the top instead. */
+  ambiguousMatchCount?: number
 }
 
 /**
@@ -288,14 +294,19 @@ export interface LocateResult {
  * among elements that are actually enabled and on-screen right now. Never reuses a position from
  * an earlier screenshot or an earlier call — the whole point is that the UI can shift between "I
  * saw it" and "I act on it," and a stale coordinate is exactly what caused wrong-target clicks.
+ *
+ * Ties in name-match score are broken by size (largest wins) — a real, generically-useful signal
+ * since a small icon-only nav link and a large call-to-action button often carry the same or a
+ * substring-overlapping label, and "the big button" is a common enough way people actually refer
+ * to the one they mean.
  */
 export async function locateElement(targetName: string): Promise<LocateResult> {
   const elements = await findElementsReliable()
   const scored = elements
     .filter((e) => e.isEnabled && !e.isOffscreen)
-    .map((e) => ({ el: e, score: scoreMatch(targetName, e) }))
+    .map((e) => ({ el: e, score: scoreMatch(targetName, e), area: e.width * e.height }))
     .filter((s) => s.score > 0)
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => (b.score !== a.score ? b.score - a.score : b.area - a.area))
 
   if (scored.length === 0) {
     return {
@@ -308,11 +319,15 @@ export async function locateElement(targetName: string): Promise<LocateResult> {
   }
 
   const best = scored[0].el
+  const topScore = scored[0].score
+  const tieCount = scored.filter((s) => s.score === topScore).length - 1
+
   return {
     found: true,
     element: best,
     centerX: Math.round(best.x + best.width / 2),
-    centerY: Math.round(best.y + best.height / 2)
+    centerY: Math.round(best.y + best.height / 2),
+    ambiguousMatchCount: tieCount > 0 ? tieCount : undefined
   }
 }
 

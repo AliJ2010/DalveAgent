@@ -68,30 +68,41 @@ export interface LocateTextResult {
   /** Populated only when not found — real text actually read off the screen, so DALVE can
    *  retry with a corrected query instead of guessing again blindly. */
   candidates?: string[]
+  /** How many OTHER lines also matched as well as the one picked — see the matching field in
+   *  uiAutomation.ts's LocateResult for why this matters: ties used to silently favor whichever
+   *  line OCR happened to read first (top of screen), even when the user meant a different,
+   *  differently-sized occurrence of the same word further down. */
+  ambiguousMatchCount?: number
 }
 
 /**
  * Fresh OCR pass every call — same "never reuse a stale position" discipline as UI element
  * targeting (uiAutomation.ts), since screen content can change between when text was read and
- * when it's acted on.
+ * when it's acted on. Ties in text-match score are broken by size (largest wins), same reasoning
+ * as the accessibility-tree path: a big, prominent piece of text is a reasonable proxy for "the
+ * big one" when a person describes a target that way.
  */
 export async function locateText(query: string): Promise<LocateTextResult> {
   const lines = await readScreenText()
   const q = query.toLowerCase().trim()
   const scored = lines
-    .map((l) => ({ line: l, score: scoreMatch(q, l.text.toLowerCase()) }))
+    .map((l) => ({ line: l, score: scoreMatch(q, l.text.toLowerCase()), area: l.width * l.height }))
     .filter((s) => s.score > 0)
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => (b.score !== a.score ? b.score - a.score : b.area - a.area))
 
   if (scored.length === 0) {
     return { found: false, candidates: lines.map((l) => l.text).slice(0, 30) }
   }
 
   const best = scored[0].line
+  const topScore = scored[0].score
+  const tieCount = scored.filter((s) => s.score === topScore).length - 1
+
   return {
     found: true,
     line: best,
     centerX: Math.round(best.x + best.width / 2),
-    centerY: Math.round(best.y + best.height / 2)
+    centerY: Math.round(best.y + best.height / 2),
+    ambiguousMatchCount: tieCount > 0 ? tieCount : undefined
   }
 }

@@ -38,6 +38,8 @@ Opening or switching to an application is a DETERMINISTIC action — never do it
 
 CRITICAL RULE, no exceptions: describing a physical action and performing it are two different things, and only the tool call actually does anything — saying words never moves the mouse or types a single character. Never say "clicking now," "moving to his chat," "typing that in," or anything similar UNLESS you are calling click_mouse/move_mouse/type_text/press_key in that exact same turn. If you haven't made the tool call yet, don't describe having done it — narrate AFTER the call resolves, or not at all, never instead of it. Silently claiming an action while doing nothing is the single worst failure mode here — worse than saying nothing, worse than asking a question — because the user has no way to tell the difference between real progress and an empty sentence until they check the screen themselves.
 
+A second, distinct failure mode: calling the tool but then describing an OUTCOME you never actually confirmed. Genuinely calling click_mouse is not the same as the click having done what you intended — on coordinate-guessed content (games, boards, canvases with no accessible labels) you are guessing pixels, and a guess can miss. Real example that happened: told to move a chess pawn, DALVE called a click tool and then said "I moved the pawn to e4" — but the click had actually missed, and the piece never moved. Never describe a specific outcome (a piece moved, a message sent, a checkbox now checked, an opponent's reply appeared) until you've looked at the NEXT frame and can actually see that outcome is true. If you can't confirm it — the board looks the same, the field is still empty — say that plainly ("that doesn't look like it worked — let me try again") and retry or adjust, rather than reporting success on faith. This matters most for anything ongoing/autonomous (playing a full game, watching for a reply) where a false "it worked" compounds: every later move is now planned against a board state that was never real.
+
 The only hard limit: never type a password, payment card number, or other credential yourself — ask the user to enter sensitive fields themselves.
 
 Screen sharing only ever watches the user's main/primary monitor — if something they mention isn't visible there, it may be on a different monitor you can't see; say so rather than guessing or clicking blind.
@@ -828,17 +830,23 @@ async function handleToolCalls(functionCalls: FunctionCall[]): Promise<void> {
           const uiResult = uiAutomation.isSupported() ? await uiAutomation.locateElement(targetName) : null
           if (uiResult?.found && uiResult.centerX !== undefined && uiResult.centerY !== undefined) {
             await screenControl.clickMouse(uiResult.centerX, uiResult.centerY, button, double, speed)
+            const ambiguityNote = uiResult.ambiguousMatchCount
+              ? ` NOTE: ${uiResult.ambiguousMatchCount} other element(s) on screen also matched "${targetName}" — if this wasn't the one the user meant (e.g. they described its color, size, or position), call find_elements to see the exact distinct names and retry with the more specific one instead of repeating the same generic word.`
+              : ''
             response = {
               status: 'SUCCESS',
-              result: `Clicked "${uiResult.element?.name}" (${uiResult.element?.controlType}), found via accessibility data.`
+              result: `Clicked "${uiResult.element?.name}" (${uiResult.element?.controlType}), found via accessibility data.${ambiguityNote}`
             }
           } else {
             const ocrResult = await ocr.locateText(targetName)
             if (ocrResult.found && ocrResult.centerX !== undefined && ocrResult.centerY !== undefined) {
               await screenControl.clickMouse(ocrResult.centerX, ocrResult.centerY, button, double, speed)
+              const ambiguityNote = ocrResult.ambiguousMatchCount
+                ? ` NOTE: ${ocrResult.ambiguousMatchCount} other occurrence(s) of "${targetName}" were also visible on screen — if this wasn't the one the user meant, call read_screen_text to see everything actually on screen and retry with more specific wording (e.g. its exact full label, not just this one word).`
+                : ''
               response = {
                 status: 'SUCCESS',
-                result: `Clicked "${ocrResult.line?.text}", found via OCR (no accessible name existed for this element).`
+                result: `Clicked "${ocrResult.line?.text}", found via OCR (no accessible name existed for this element).${ambiguityNote}`
               }
             } else {
               response = {
