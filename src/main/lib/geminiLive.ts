@@ -15,6 +15,7 @@ import * as screenControl from './screenControl'
 import * as autonomousTask from './autonomousTask'
 import * as appControl from './appControl'
 import * as uiAutomation from './uiAutomation'
+import * as ocr from './ocr'
 import * as journal from './journal'
 import type { AgentConfig, VoiceEvent } from '@shared/types'
 
@@ -41,7 +42,7 @@ The only hard limit: never type a password, payment card number, or other creden
 
 Screen sharing only ever watches the user's main/primary monitor — if something they mention isn't visible there, it may be on a different monitor you can't see; say so rather than guessing or clicking blind.
 
-On Windows, click_element is the DEFAULT way to interact with anything that has a visible label — buttons, links, menu items, tabs, form fields. It reads the real OS accessibility tree and clicks the actual live position of the named element, re-checked fresh at the moment of the click — it cannot go stale, and it cannot miss because of compressed or small video. Reach for click_mouse/move_mouse (pixel coordinates from the video feed) only for things with no accessible name — canvas content, games, drawing surfaces — or when click_element reports it couldn't find a match (it's not implemented on macOS yet, so fall back there too). Use find_elements when you're unsure of an element's exact name or the video feed is ambiguous — it costs nothing and tells you what's really there instead of you guessing.
+On Windows, you have a real targeting priority order — always try them in this sequence, never skip straight to guessing pixel coordinates: (1) click_element — reads the real OS accessibility tree and clicks the actual live position of a named element, re-checked fresh at the moment of the click; this is correct for essentially anything with a visible label (buttons, links, menu items, tabs, form fields). (2) click_text — real OCR on the actual rendered pixels, for content with no accessible name (canvas UI, video/subtitle text, an image containing text). (3) click_mouse/move_mouse from the video feed — last resort only, for genuinely non-textual content (a game, a drawing canvas, a map). Use find_elements or read_screen_text first whenever you're not certain of an exact name/text — they cost nothing and tell you what's really there instead of you guessing. macOS doesn't have click_element yet (falls straight to click_text, then click_mouse).
 
 Clicking the wrong thing (e.g. the wrong contact in a chat list, the wrong item in a similar-looking row) is the single most common way you fail at this — the video feed is compressed and small text is easy to misread, so never click from a single glance when you're relying on pixel coordinates. Before a coordinate-based click where similar-looking rows could be confused, quickly move_mouse there first — that's free — and confirm in the next frame that the cursor actually landed on the right element before you click_mouse; skip this check when using click_element (it's already precise) or when the target is obvious and unambiguous. If a click turns out to have hit the wrong thing, say so immediately and correct it rather than continuing as if it worked. When a task spans multiple turns (e.g. "keep this conversation going without me"), re-check the screen state at the start of each new step rather than assuming it still matches what you last saw — things move, replies arrive, windows change focus.
 
@@ -223,6 +224,29 @@ const CLICK_ELEMENT_TOOL: FunctionDeclaration = {
   }
 }
 
+const READ_SCREEN_TEXT_TOOL: FunctionDeclaration = {
+  name: 'read_screen_text',
+  description:
+    "Runs real OCR (optical character recognition) on the current screen and returns every piece of text it actually reads, with position. Use this for text that has no accessibility name at all — canvas-rendered UI, video/subtitle text, an image containing text, or any app find_elements can't see into. This is real character recognition on the actual pixels, not a guess.",
+  parametersJsonSchema: { type: 'object', properties: {} }
+}
+
+const CLICK_TEXT_TOOL: FunctionDeclaration = {
+  name: 'click_text',
+  description:
+    "Clicks a piece of text found via real OCR on the current screen — for content with no accessible name that click_element can't find (canvas/custom-rendered UI, an image or video frame containing the text). Re-reads the screen fresh at the moment of the call, so it can't click a stale position. Priority order for anything on screen: try click_element first (fastest, most precise, works when the target has a real accessible name), then click_text (works on rendered pixels via OCR), and only fall back to click_mouse with coordinates you read off the video feed as a last resort.",
+  parametersJsonSchema: {
+    type: 'object',
+    properties: {
+      text: { type: 'string', description: 'The text to find and click, as exactly as you can read it. Matching tolerates minor OCR misreads.' },
+      button: { type: 'string', enum: ['left', 'right', 'middle'], description: 'Defaults to left.' },
+      double: { type: 'boolean', description: 'Double-click instead of a single click.' },
+      speed: SPEED_PARAM_SCHEMA
+    },
+    required: ['text']
+  }
+}
+
 const TRACE_PATTERN_TOOL: FunctionDeclaration = {
   name: 'trace_pattern',
   description:
@@ -383,6 +407,8 @@ async function buildToolsForAgent(agent: AgentConfig | null): Promise<Tool[]> {
     CLICK_MOUSE_TOOL,
     FIND_ELEMENTS_TOOL,
     CLICK_ELEMENT_TOOL,
+    READ_SCREEN_TEXT_TOOL,
+    CLICK_TEXT_TOOL,
     TRACE_PATTERN_TOOL,
     TYPE_TEXT_TOOL,
     PRESS_KEY_TOOL,
@@ -776,7 +802,7 @@ async function handleToolCalls(functionCalls: FunctionCall[]): Promise<void> {
         if (!uiAutomation.isSupported()) {
           response = { error: 'UI element reading is only implemented for Windows so far — use the video feed and move_mouse/click_mouse instead.' }
         } else {
-          const elements = await uiAutomation.findElements()
+          const elements = await uiAutomation.findElementsReliable()
           response = {
             result: elements
               .slice(0, 80)
@@ -810,6 +836,36 @@ async function handleToolCalls(functionCalls: FunctionCall[]): Promise<void> {
               status: 'SUCCESS',
               result: `Clicked "${located.element?.name}" (${located.element?.controlType}).`
             }
+          }
+        }
+      } else if (fc.name === 'read_screen_text') {
+        const lines = await ocr.readScreenText()
+        response = {
+          result: lines.length
+            ? lines.map((l) => l.text).join('\n')
+            : 'No text was recognized on screen right now.'
+        }
+      } else if (fc.name === 'click_text') {
+        const targetText = String(args.text ?? '').trim()
+        if (!targetText) {
+          response = { error: 'No text given.' }
+        } else {
+          const located = await ocr.locateText(targetText)
+          if (!located.found || located.centerX === undefined || located.centerY === undefined) {
+            response = {
+              status: 'FAILED',
+              error: `OCR didn't find text matching "${targetText}" on screen right now.`,
+              candidates: located.candidates ?? []
+            }
+          } else {
+            await screenControl.clickMouse(
+              located.centerX,
+              located.centerY,
+              (args.button as 'left' | 'right' | 'middle') ?? 'left',
+              Boolean(args.double),
+              (args.speed as 'instant' | 'visible') ?? 'visible'
+            )
+            response = { status: 'SUCCESS', result: `Clicked text "${located.line?.text}".` }
           }
         }
       } else if (fc.name === 'trace_pattern') {

@@ -12,6 +12,10 @@ files:
 asarUnpack:
   - resources/**
   - node_modules/robotjs/**
+  # tesseract.js loads its worker script and WASM core from real file paths at runtime — same
+  # class of problem robotjs had — so it needs to live outside the asar archive too.
+  - node_modules/tesseract.js/**
+  - node_modules/tesseract.js-core/**
 win:
   executableName: DALVE
 nsis:

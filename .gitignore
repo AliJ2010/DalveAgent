@@ -5,3 +5,5 @@ out
 .eslintcache
 *.log*
 .claude
+# tesseract.js downloads/caches its language model here on first OCR use
+*.traineddata
