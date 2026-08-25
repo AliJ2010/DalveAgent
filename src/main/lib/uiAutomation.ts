@@ -272,6 +272,22 @@ function scoreMatch(target: string, el: UiElement): number {
   return 0
 }
 
+// Chromium's own browser-frame UI (tabs, toolbar, the signed-in-account button) sits in the SAME
+// accessibility tree as the actual webpage content, and gets enumerated first in traversal order
+// — found live: asked to click a WhatsApp Web chat named "Ali," it instead clicked Chrome's own
+// account/profile button, which is ALSO literally named "Ali" (the signed-in Google account's own
+// name), and with no tiebreak at all the first-found exact match won outright regardless of which
+// one a person actually meant. These are real, verified-live Chromium internal accessibility
+// class names for exactly that kind of native chrome, not guesses — deprioritizing them means a
+// same- or lower-scored piece of real page content still wins over the browser's own furniture,
+// which is what a person almost always means when they say "click X."
+const BROWSER_CHROME_CLASS_PATTERN =
+  /toolbar|omnibox|tabstrip|^tab$|tabclosebutton|browserappmenu|windowscaptionbutton|backforwardbutton|reloadbutton|locationiconview|pageactionview|bookmark/i
+
+function isBrowserChromeElement(el: UiElement): boolean {
+  return BROWSER_CHROME_CLASS_PATTERN.test(el.className)
+}
+
 export interface LocateResult {
   found: boolean
   element?: UiElement
@@ -304,9 +320,13 @@ export async function locateElement(targetName: string): Promise<LocateResult> {
   const elements = await findElementsReliable()
   const scored = elements
     .filter((e) => e.isEnabled && !e.isOffscreen)
-    .map((e) => ({ el: e, score: scoreMatch(targetName, e), area: e.width * e.height }))
+    .map((e) => ({ el: e, score: scoreMatch(targetName, e), area: e.width * e.height, isChrome: isBrowserChromeElement(e) }))
     .filter((s) => s.score > 0)
-    .sort((a, b) => (b.score !== a.score ? b.score - a.score : b.area - a.area))
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score
+      if (a.isChrome !== b.isChrome) return a.isChrome ? 1 : -1
+      return b.area - a.area
+    })
 
   if (scored.length === 0) {
     return {
