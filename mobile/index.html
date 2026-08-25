@@ -1,0 +1,551 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>DALVE</title>
+<style>
+  :root {
+    --c-void: #050403;
+    --c-panel: rgba(18, 15, 12, 0.72);
+    --c-panel-border: rgba(212, 175, 55, 0.16);
+    --c-panel-border-strong: rgba(212, 175, 55, 0.32);
+    --c-gold: #d4af37;
+    --c-gold-bright: #f2d06b;
+    --c-gold-dim: #8a6f26;
+    --c-warm-white: #f5ecd8;
+    --c-text-1: rgba(245, 238, 224, 0.92);
+    --c-text-2: rgba(245, 238, 224, 0.6);
+    --c-text-3: rgba(245, 238, 224, 0.4);
+    --c-status-active: #6fe08a;
+    --c-status-error: #e0736f;
+  }
+  * { box-sizing: border-box; margin: 0; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
+  body {
+    background: var(--c-void);
+    color: var(--c-text-1);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+  input { font: inherit; color: inherit; }
+
+  /* --- Auth screen --- */
+  #authScreen {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    gap: 16px;
+  }
+  .wordmark { text-transform: uppercase; letter-spacing: 0.28em; font-size: 13px; font-weight: 600; color: var(--c-gold); }
+  #authScreen h1 { font-size: 22px; font-weight: 600; color: var(--c-warm-white); margin-top: 4px; }
+  .authField {
+    width: 100%;
+    max-width: 340px;
+    padding: 14px 16px;
+    border-radius: 12px;
+    border: 1px solid var(--c-panel-border-strong);
+    background: var(--c-panel);
+    color: var(--c-text-1);
+    font-size: 15px;
+  }
+  .authField:focus { outline: none; border-color: var(--c-gold); }
+  .primaryBtn {
+    width: 100%;
+    max-width: 340px;
+    padding: 14px;
+    border-radius: 999px;
+    background: var(--c-gold);
+    color: #050403;
+    font-weight: 600;
+    font-size: 15px;
+    text-align: center;
+  }
+  .primaryBtn:disabled { opacity: 0.5; }
+  .linkBtn { color: var(--c-text-2); font-size: 13px; text-decoration: underline; }
+  #authError { color: var(--c-status-error); font-size: 13px; min-height: 18px; text-align: center; }
+
+  /* --- Main screen --- */
+  #mainScreen { display: none; flex: 1; flex-direction: column; min-height: 0; }
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--c-panel-border);
+  }
+  #agentPicker { display: flex; align-items: center; gap: 8px; font-size: 15px; color: var(--c-warm-white); }
+  #agentPicker svg { color: var(--c-gold); }
+  #signOutBtn { color: var(--c-text-3); font-size: 13px; }
+
+  #transcript {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .msg { max-width: 85%; padding: 10px 14px; border-radius: 14px; font-size: 14.5px; line-height: 1.45; }
+  .msg.user { align-self: flex-end; background: var(--c-gold); color: #050403; border-bottom-right-radius: 4px; }
+  .msg.dalve { align-self: flex-start; background: var(--c-panel); border: 1px solid var(--c-panel-border); border-bottom-left-radius: 4px; }
+  .msg.system { align-self: center; color: var(--c-text-3); font-size: 12px; text-align: center; }
+
+  footer {
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    border-top: 1px solid var(--c-panel-border);
+  }
+  #statusLabel { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--c-text-3); }
+  #statusLabel.listening { color: var(--c-status-active); }
+  #statusLabel.error { color: var(--c-status-error); }
+  #micBtn {
+    width: 76px;
+    height: 76px;
+    border-radius: 50%;
+    background: var(--c-panel);
+    border: 2px solid var(--c-panel-border-strong);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 160ms ease;
+  }
+  #micBtn.active {
+    background: var(--c-gold);
+    border-color: var(--c-gold-bright);
+    box-shadow: 0 0 0 8px rgba(212, 175, 55, 0.14);
+  }
+  #micBtn svg { width: 30px; height: 30px; }
+  #micBtn.active svg { color: #050403; }
+  #micBtn:not(.active) svg { color: var(--c-gold-bright); }
+
+  /* --- Agent drawer --- */
+  #drawerOverlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 20;
+  }
+  #drawer {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    max-height: 70vh;
+    background: #0c0a08;
+    border-top: 1px solid var(--c-panel-border-strong);
+    border-radius: 20px 20px 0 0;
+    padding: 20px;
+    overflow-y: auto;
+    z-index: 21;
+  }
+  #drawer h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--c-text-2); margin-bottom: 14px; }
+  .agentRow {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 8px;
+    border-radius: 10px;
+  }
+  .agentRow:active { background: var(--c-panel); }
+  .agentDot { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+  .agentName { font-size: 15px; color: var(--c-text-1); }
+  .agentType { font-size: 12px; color: var(--c-text-3); }
+</style>
+</head>
+<body>
+
+<div id="authScreen">
+  <div class="wordmark">DALVE</div>
+  <h1>Talk to DALVE</h1>
+  <input id="emailInput" class="authField" type="email" placeholder="Email" autocomplete="username" />
+  <input id="passwordInput" class="authField" type="password" placeholder="Password" autocomplete="current-password" />
+  <div id="authError"></div>
+  <button id="signInBtn" class="primaryBtn">Sign In</button>
+  <button id="toggleSignUpBtn" class="linkBtn">Need an account? Sign up instead</button>
+</div>
+
+<div id="mainScreen">
+  <header>
+    <button id="agentPicker">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg>
+      <span id="activeAgentName">DALVE</span>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+    </button>
+    <button id="signOutBtn">Sign Out</button>
+  </header>
+
+  <div id="transcript"></div>
+
+  <footer>
+    <div id="statusLabel">Tap to talk</div>
+    <button id="micBtn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <rect x="9" y="2" width="6" height="12" rx="3"/>
+        <path d="M5 10v1a7 7 0 0 0 14 0v-1"/>
+        <path d="M12 18v4"/>
+      </svg>
+    </button>
+  </footer>
+</div>
+
+<div id="drawerOverlay"></div>
+<div id="drawer">
+  <h2>Switch Agent</h2>
+  <div id="agentList"></div>
+</div>
+
+<script type="module">
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.112.4'
+import { GoogleGenAI, Modality } from 'https://esm.sh/@google/genai@2.18.0'
+
+// Same project as the desktop app — one account, same data, same anon key (public/safe by
+// design, protected by Postgres RLS; see supabase/schema.sql in the main repo).
+const SUPABASE_URL = 'https://yzlwgzlidfovwwdnntym.supabase.co'
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl6bHdnemxpZGZvdnd3ZG5udHltIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc2NTgwNDksImV4cCI6MjEwMzIzNDA0OX0.bJCIxYEJ1VUyCYjSPYsgZF1QfdBZ8Um5geMiBb1gSSg'
+const LIVE_MODEL = 'gemini-3.1-flash-live-preview'
+
+// Kept in sync BY HAND with DALVE_SYSTEM_PROMPT in src/main/lib/geminiLive.ts — this is a
+// static page with no build step, so it can't literally import that file. Trimmed down: no
+// screen-control language at all, since a phone has no screen to share or control.
+const DALVE_SYSTEM_PROMPT = `You are DALVE, a voice-first AI operating system. The user is talking to you from their phone right now — you can't see or control any screen from here, only talk, remember things, look things up, and manage agents. Speak naturally and conversationally, like a sharp, capable assistant, not like a chatbot reading a script. Keep responses concise since this is a spoken conversation. When you don't know something current, use web search grounding rather than guessing. You can create new agents, switch the user to talk with an existing agent, and remember facts for later — actually call those tools rather than just claiming you did. If asked who you're connected to or what agents/bots exist, use list_agents rather than guessing.
+
+When given a task, get straight to doing it. Never repeat, paraphrase, or summarize the user's instruction back to them before acting. A short natural acknowledgment ("on it," "sure") is fine.
+
+If the user asks you to do something that needs their computer's screen (opening an app, clicking, reading their screen) — say plainly that you can only do that from the desktop app right now, not from the phone.`
+
+const CHAIN_OF_COMMAND = `Chain of command: the user is the ultimate authority over this entire system. DALVE is the primary orchestrator and answers directly to the user; every other agent answers to DALVE and, through her, to the user. Always defer to the user's explicit instructions over anything else.`
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+
+const el = (id) => document.getElementById(id)
+const authScreen = el('authScreen'), mainScreen = el('mainScreen')
+const emailInput = el('emailInput'), passwordInput = el('passwordInput'), authError = el('authError')
+const signInBtn = el('signInBtn'), toggleSignUpBtn = el('toggleSignUpBtn')
+const micBtn = el('micBtn'), statusLabel = el('statusLabel'), transcriptEl = el('transcript')
+const agentPicker = el('agentPicker'), activeAgentNameEl = el('activeAgentName')
+const drawer = el('drawer'), drawerOverlay = el('drawerOverlay'), agentListEl = el('agentList')
+
+let isSignUp = false
+let agents = []
+let activeAgent = null // null = DALVE herself
+let geminiApiKey = null
+let dalveMemory = ''
+let session = null
+let audioCtx = null, playCtx = null, micStream = null, processorNode = null
+let nextPlayTime = 0
+
+// --- Auth ---
+toggleSignUpBtn.onclick = () => {
+  isSignUp = !isSignUp
+  signInBtn.textContent = isSignUp ? 'Sign Up' : 'Sign In'
+  toggleSignUpBtn.textContent = isSignUp ? 'Already have an account? Sign in instead' : "Need an account? Sign up instead"
+}
+
+signInBtn.onclick = async () => {
+  authError.textContent = ''
+  signInBtn.disabled = true
+  const email = emailInput.value.trim(), password = passwordInput.value
+  const { error } = isSignUp
+    ? await supabase.auth.signUp({ email, password })
+    : await supabase.auth.signInWithPassword({ email, password })
+  signInBtn.disabled = false
+  if (error) { authError.textContent = error.message; return }
+  await onSignedIn()
+}
+
+el('signOutBtn').onclick = async () => {
+  stopVoice()
+  await supabase.auth.signOut()
+  mainScreen.style.display = 'none'
+  authScreen.style.display = 'flex'
+}
+
+async function restoreSession() {
+  const { data } = await supabase.auth.getSession()
+  if (data.session) await onSignedIn()
+}
+
+async function onSignedIn() {
+  authScreen.style.display = 'none'
+  mainScreen.style.display = 'flex'
+  await loadData()
+}
+
+async function loadData() {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return
+
+  const { data: settingsRow } = await supabase.from('settings').select('*').eq('user_id', user.id).maybeSingle()
+  geminiApiKey = settingsRow?.gemini_api_key ?? null
+  dalveMemory = settingsRow?.dalve_memory ?? ''
+  if (!geminiApiKey) {
+    addSystemMessage('No Gemini API key found on this account yet — add one in the desktop app\'s Settings, then reopen this page.')
+  }
+
+  const { data: agentRows } = await supabase.from('agents').select('*').eq('user_id', user.id)
+  agents = (agentRows ?? []).filter((a) => !a.archived).map(rowFromSupabase)
+  renderAgentList()
+}
+
+function rowFromSupabase(r) {
+  return { id: r.id, name: r.name, type: r.type, parentId: r.parent_id, color: r.color, systemPrompt: r.system_prompt, memory: r.memory ?? '', voice: r.voice }
+}
+
+function renderAgentList() {
+  agentListEl.innerHTML = ''
+  const dalveRow = document.createElement('div')
+  dalveRow.className = 'agentRow'
+  dalveRow.innerHTML = `<span class="agentDot" style="background:#d4af37"></span><div><div class="agentName">DALVE</div><div class="agentType">primary</div></div>`
+  dalveRow.onclick = () => selectAgent(null)
+  agentListEl.appendChild(dalveRow)
+
+  for (const a of agents) {
+    const row = document.createElement('div')
+    row.className = 'agentRow'
+    row.innerHTML = `<span class="agentDot" style="background:${a.color}"></span><div><div class="agentName">${a.name}</div><div class="agentType">${a.type}</div></div>`
+    row.onclick = () => selectAgent(a)
+    agentListEl.appendChild(row)
+  }
+}
+
+function selectAgent(agent) {
+  activeAgent = agent
+  activeAgentNameEl.textContent = agent ? agent.name : 'DALVE'
+  closeDrawer()
+  if (session) stopVoice()
+}
+
+agentPicker.onclick = () => { drawer.style.display = 'block'; drawerOverlay.style.display = 'block' }
+drawerOverlay.onclick = closeDrawer
+function closeDrawer() { drawer.style.display = 'none'; drawerOverlay.style.display = 'none' }
+
+// --- Transcript UI ---
+function addMessage(role, text) {
+  const div = document.createElement('div')
+  div.className = 'msg ' + role
+  div.textContent = text
+  transcriptEl.appendChild(div)
+  transcriptEl.scrollTop = transcriptEl.scrollHeight
+  return div
+}
+function addSystemMessage(text) { addMessage('system', text) }
+
+function setStatus(text, cls) {
+  statusLabel.textContent = text
+  statusLabel.className = cls || ''
+}
+
+// --- Tool execution (reduced set — no screen/OS tools; those are desktop-only) ---
+async function executeTool(name, args) {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (name === 'list_agents') {
+    if (agents.length === 0) return { result: 'No other agents exist yet.' }
+    return { result: agents.map((a) => `- ${a.name} (${a.type}): ${(a.systemPrompt || '').split('.')[0].slice(0, 140)}`).join('\n') }
+  }
+  if (name === 'switch_agent') {
+    const targetName = String(args.name || '').trim().toLowerCase()
+    if (targetName === 'dalve') { pendingSwitch = 'DALVE'; return { result: 'Okay — switching back to DALVE once you finish speaking.' } }
+    const target = agents.find((a) => a.name.toLowerCase() === targetName)
+    if (!target) return { error: `No agent named "${args.name}" found.` }
+    pendingSwitch = target
+    return { result: `Okay — switching to ${target.name} once you finish speaking.` }
+  }
+  if (name === 'remember_fact') {
+    const fact = String(args.fact || '').trim()
+    if (!fact) return { error: 'No fact given.' }
+    if (activeAgent) {
+      const newMemory = activeAgent.memory ? activeAgent.memory + '\n- ' + fact : '- ' + fact
+      await supabase.from('agents').update({ memory: newMemory, updated_at: Date.now() }).eq('id', activeAgent.id)
+      activeAgent.memory = newMemory
+    } else {
+      dalveMemory = dalveMemory ? dalveMemory + '\n- ' + fact : '- ' + fact
+      await supabase.from('settings').update({ dalve_memory: dalveMemory, updated_at: Date.now() }).eq('user_id', user.id)
+    }
+    return { result: 'Saved.' }
+  }
+  if (name === 'create_agent') {
+    const id = 'agent_' + Date.now() + '_' + Math.floor(Math.random() * 1e6)
+    const row = {
+      id, user_id: user.id, name: args.name || 'New Agent', type: args.type === 'bot' ? 'bot' : 'companion',
+      parent_id: null, color: '#d4af37', system_prompt: args.description || '', tool_scope: [], memory: '',
+      voice: 'Kore', status: 'idle', archived: false, created_at: Date.now(), updated_at: Date.now()
+    }
+    await supabase.from('agents').insert(row)
+    agents.push(rowFromSupabase(row))
+    renderAgentList()
+    return { result: `Created ${row.type} "${row.name}".` }
+  }
+  if (name === 'open_url') {
+    window.open(String(args.url || ''), '_blank')
+    return { result: `Opened ${args.url}` }
+  }
+  return { error: `"${name}" isn't available from the phone yet — that needs the desktop app.` }
+}
+
+let pendingSwitch = undefined
+
+// --- Voice session (mirrors src/main/lib/geminiLive.ts's connect config + src/renderer's
+// audioCapture.ts/audioPlayback.ts PCM16 handling, adapted to run directly in a browser tab) ---
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer)
+  let binary = ''
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
+  return btoa(binary)
+}
+function base64ToUint8Array(base64) {
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  return bytes
+}
+
+function playChunk(base64Pcm16) {
+  if (!playCtx) playCtx = new AudioContext({ sampleRate: 24000 })
+  const bytes = base64ToUint8Array(base64Pcm16)
+  const sampleCount = Math.floor(bytes.byteLength / 2)
+  const pcm16 = new Int16Array(bytes.buffer, bytes.byteOffset, sampleCount)
+  const float32 = new Float32Array(sampleCount)
+  for (let i = 0; i < sampleCount; i++) float32[i] = pcm16[i] / 0x8000
+  const buffer = playCtx.createBuffer(1, sampleCount, 24000)
+  buffer.copyToChannel(float32, 0)
+  const source = playCtx.createBufferSource()
+  source.buffer = buffer
+  source.connect(playCtx.destination)
+  const startAt = Math.max(playCtx.currentTime, nextPlayTime)
+  source.start(startAt)
+  nextPlayTime = startAt + buffer.duration
+}
+
+let dalveTurnBuffer = ''
+
+async function startVoice() {
+  if (!geminiApiKey) { setStatus('No API key — see message above', 'error'); return }
+  if (session) return
+
+  micBtn.classList.add('active')
+  setStatus('Connecting…')
+
+  const ai = new GoogleGenAI({ apiKey: geminiApiKey })
+  const memoryNote = (!activeAgent && dalveMemory) ? `\n\nThings you've saved to remember from earlier conversations:\n${dalveMemory}` : ''
+  const systemPrompt = (activeAgent ? activeAgent.systemPrompt : DALVE_SYSTEM_PROMPT) + `\n\n${CHAIN_OF_COMMAND}` + memoryNote
+  const voiceName = activeAgent ? activeAgent.voice : 'Kore'
+
+  const tools = [{
+    functionDeclarations: [
+      { name: 'list_agents', description: "Lists every companion/bot registered. Call this whenever asked what agents exist.", parametersJsonSchema: { type: 'object', properties: {} } },
+      { name: 'switch_agent', description: 'Switches which agent the user is talking to, or "DALVE" to switch back.', parametersJsonSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } },
+      { name: 'remember_fact', description: "Saves a fact to remember for later.", parametersJsonSchema: { type: 'object', properties: { fact: { type: 'string' } }, required: ['fact'] } },
+      { name: 'create_agent', description: 'Creates a new companion or bot agent.', parametersJsonSchema: { type: 'object', properties: { name: { type: 'string' }, type: { type: 'string', enum: ['companion', 'bot'] }, description: { type: 'string' } }, required: ['name', 'description'] } },
+      { name: 'open_url', description: "Opens a website in a new tab.", parametersJsonSchema: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } }
+    ]
+  }]
+
+  try {
+    session = await ai.live.connect({
+      model: LIVE_MODEL,
+      config: {
+        responseModalities: [Modality.AUDIO],
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } },
+        inputAudioTranscription: {},
+        outputAudioTranscription: {},
+        tools
+      },
+      callbacks: {
+        onopen: async () => {
+          setStatus('Listening…', 'listening')
+          await startMic()
+        },
+        onmessage: async (message) => {
+          if (message.serverContent?.outputTranscription?.text) {
+            dalveTurnBuffer += message.serverContent.outputTranscription.text
+          }
+          if (message.serverContent?.modelTurn?.parts) {
+            for (const part of message.serverContent.modelTurn.parts) {
+              if (part.inlineData?.data) playChunk(part.inlineData.data)
+            }
+          }
+          if (message.serverContent?.interrupted) nextPlayTime = 0
+          if (message.serverContent?.turnComplete) {
+            if (dalveTurnBuffer.trim()) addMessage('dalve', dalveTurnBuffer.trim())
+            dalveTurnBuffer = ''
+            if (pendingSwitch !== undefined) {
+              const next = pendingSwitch === 'DALVE' ? null : pendingSwitch
+              pendingSwitch = undefined
+              selectAgent(next)
+              stopVoice()
+              startVoice()
+            }
+          }
+          if (message.toolCall?.functionCalls?.length) {
+            const responses = []
+            for (const fc of message.toolCall.functionCalls) {
+              const response = await executeTool(fc.name, fc.args || {})
+              responses.push({ id: fc.id, name: fc.name, response })
+            }
+            session.sendToolResponse({ functionResponses: responses })
+          }
+        },
+        onerror: (e) => { console.error(e); setStatus('Error — tap to retry', 'error'); stopVoice() },
+        onclose: () => { setStatus('Tap to talk'); micBtn.classList.remove('active') }
+      }
+    })
+  } catch (err) {
+    console.error(err)
+    setStatus('Connection failed — tap to retry', 'error')
+    micBtn.classList.remove('active')
+    session = null
+  }
+}
+
+async function startMic() {
+  micStream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
+  audioCtx = new AudioContext({ sampleRate: 16000 })
+  void audioCtx.resume()
+  const source = audioCtx.createMediaStreamSource(micStream)
+  processorNode = audioCtx.createScriptProcessor(4096, 1, 1)
+  const silence = audioCtx.createGain()
+  silence.gain.value = 0
+  processorNode.onaudioprocess = (e) => {
+    if (!session) return
+    const input = e.inputBuffer.getChannelData(0)
+    const pcm16 = new Int16Array(input.length)
+    for (let i = 0; i < input.length; i++) {
+      const s = Math.max(-1, Math.min(1, input[i]))
+      pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff
+    }
+    session.sendRealtimeInput({ audio: { data: arrayBufferToBase64(pcm16.buffer), mimeType: 'audio/pcm;rate=16000' } })
+  }
+  source.connect(processorNode)
+  processorNode.connect(silence)
+  silence.connect(audioCtx.destination)
+}
+
+function stopVoice() {
+  if (session) { session.close(); session = null }
+  if (processorNode) { processorNode.disconnect(); processorNode = null }
+  if (micStream) { micStream.getTracks().forEach((t) => t.stop()); micStream = null }
+  if (audioCtx) { void audioCtx.close(); audioCtx = null }
+  nextPlayTime = 0
+  dalveTurnBuffer = ''
+  micBtn.classList.remove('active')
+  setStatus('Tap to talk')
+}
+
+micBtn.onclick = () => { session ? stopVoice() : startVoice() }
+
+restoreSession()
+</script>
+</body>
+</html>
