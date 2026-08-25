@@ -14,6 +14,12 @@ jobs:
   build:
     strategy:
       fail-fast: false # one platform's release-publish hiccup shouldn't cancel the other's build
+      # Both platforms publish to the SAME version tag, and electron-builder's GitHub publisher
+      # isn't race-safe: two processes hitting "create this release" for the same brand-new tag
+      # at once causes one to lose (422 "Published releases must have a valid tag"). Sequential
+      # execution means the second job's electron-builder always finds the tag the first job
+      # already created and just adds its assets to it instead of racing to create it too.
+      max-parallel: 1
       matrix:
         include:
           - os: windows-latest
