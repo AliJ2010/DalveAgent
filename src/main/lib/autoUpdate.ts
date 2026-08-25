@@ -1,5 +1,6 @@
 import { autoUpdater } from 'electron-updater'
 import { app } from 'electron'
+import log from 'electron-log/main'
 import * as geminiLive from './geminiLive'
 import * as autonomousTask from './autonomousTask'
 
@@ -20,9 +21,21 @@ import * as autonomousTask from './autonomousTask'
  * build gets signed; until then it just checks and silently finds nothing it can apply.
  */
 export function initAutoUpdate(): void {
+  // Everything below only writes to a hidden stdout in a packaged app — no DevTools, no visible
+  // console, nowhere to look when something's wrong. electron-log writes to a real file on disk
+  // (and electron-updater's OWN internal step-by-step logging gets captured too, via the
+  // `logger` assignment below) so a genuine "did it even check?" question has an actual answer
+  // instead of a guess.
+  log.transports.file.level = 'info'
+  autoUpdater.logger = log
+  log.info('[autoUpdate] log file:', log.transports.file.getFile().path)
+
   // electron-updater expects a packaged app with real release metadata next to it — running it
   // against a dev build does nothing useful and just logs noise.
-  if (!app.isPackaged) return
+  if (!app.isPackaged) {
+    log.info('[autoUpdate] skipped — not a packaged build')
+    return
+  }
 
   autoUpdater.autoDownload = true
   // We drive the install moment ourselves (see below) instead of letting electron-updater apply
@@ -31,14 +44,17 @@ export function initAutoUpdate(): void {
 
   let installTimer: ReturnType<typeof setInterval> | null = null
 
-  autoUpdater.on('error', (err) => console.error('[autoUpdate] error:', err))
-  autoUpdater.on('update-available', (info) => console.log('[autoUpdate] downloading update:', info.version))
+  autoUpdater.on('error', (err) => log.error('[autoUpdate] error:', err))
+  autoUpdater.on('checking-for-update', () => log.info('[autoUpdate] checking for update, current version:', app.getVersion()))
+  autoUpdater.on('update-not-available', (info) => log.info('[autoUpdate] no update available, latest is:', info.version))
+  autoUpdater.on('update-available', (info) => log.info('[autoUpdate] update available, downloading:', info.version))
   autoUpdater.on('update-downloaded', (info) => {
-    console.log('[autoUpdate] update downloaded, installing as soon as safe:', info.version)
+    log.info('[autoUpdate] update downloaded, installing as soon as safe:', info.version)
     if (installTimer) return
     const tryInstall = (): void => {
       if (geminiLive.isSessionActive() || autonomousTask.isActive()) return
       if (installTimer) clearInterval(installTimer)
+      log.info('[autoUpdate] installing now')
       autoUpdater.quitAndInstall()
     }
     tryInstall() // covers the common case: nothing was happening when the download finished
@@ -46,7 +62,7 @@ export function initAutoUpdate(): void {
   })
 
   const check = (): void => {
-    autoUpdater.checkForUpdates().catch((err) => console.error('[autoUpdate] check failed:', err))
+    autoUpdater.checkForUpdates().catch((err) => log.error('[autoUpdate] check failed:', err))
   }
 
   check()

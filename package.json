@@ -29,6 +29,7 @@
     "@google/genai": "^2.18.0",
     "@supabase/supabase-js": "^2.112.4",
     "dagre": "^0.8.5",
+    "electron-log": "^5.4.4",
     "electron-updater": "^6.8.9",
     "lucide-react": "^1.33.0",
     "reactflow": "^11.11.4",
