@@ -11,6 +11,7 @@ import {
   type Part
 } from '@google/genai'
 import { shell, type BrowserWindow } from 'electron'
+import log from 'electron-log/main'
 import { settingsStore } from './settingsStore'
 import * as screenControl from './screenControl'
 import type { AutonomousTaskEvent } from '@shared/types'
@@ -83,6 +84,7 @@ export function startAutonomousTask(goal: string): void {
   history = []
   screenControl.setControlGranted(true)
   emit({ type: 'started', goal })
+  log.info(`[autonomousTask] started, goal="${goal}", log file: ${log.transports.file.getFile().path}`)
 
   const runCycle = async (): Promise<void> => {
     try {
@@ -222,18 +224,41 @@ Recent history of this task:\n${history.length > 0 ? history.join('\n') : '(noth
   const contents: Content[] = [createUserContent([{ text: systemText }, createPartFromBase64(firstShot, 'image/jpeg')])]
 
   for (let round = 0; round < MAX_ROUNDS_PER_TICK; round++) {
-    const response = await ai.models.generateContent({
-      model: POLL_MODEL,
-      contents,
-      config: {
-        tools: [
-          { computerUse: { environment: Environment.ENVIRONMENT_DESKTOP } },
-          { functionDeclarations: [FINISH_CYCLE_TOOL, MARK_TASK_COMPLETE_TOOL] }
-        ]
+    log.info(`[autonomousTask] round ${round}: calling ${POLL_MODEL} with computer_use tool`)
+    let response
+    try {
+      response = await ai.models.generateContent({
+        model: POLL_MODEL,
+        contents,
+        config: {
+          tools: [
+            { computerUse: { environment: Environment.ENVIRONMENT_DESKTOP } },
+            { functionDeclarations: [FINISH_CYCLE_TOOL, MARK_TASK_COMPLETE_TOOL] }
+          ]
+        }
+      })
+    } catch (err) {
+      // Deliberately dumping every own property, not just .message — SDK/API errors often carry
+      // the actual rejection reason (e.g. "these tools cannot be combined") in a nested field
+      // that .message alone won't show, and guessing at the cause instead of reading it is
+      // exactly the trap this logging exists to avoid.
+      log.error('[autonomousTask] generateContent threw:', err instanceof Error ? err.stack : err)
+      try {
+        log.error('[autonomousTask] full error object:', JSON.stringify(err, Object.getOwnPropertyNames(err as object)))
+      } catch {
+        // some error shapes don't survive JSON.stringify — the .stack log above already covers it
       }
-    })
+      throw err
+    }
 
     const calls = response.functionCalls
+    log.info(
+      `[autonomousTask] round ${round} response: functionCalls=${calls ? calls.length : 0}` +
+        (calls?.length ? ` names=[${calls.map((c) => c.name).join(', ')}]` : '') +
+        (response.text ? ` text="${response.text.slice(0, 300)}"` : '') +
+        (response.candidates?.[0]?.finishReason ? ` finishReason=${response.candidates[0].finishReason}` : '')
+    )
+
     if (!calls || calls.length === 0) {
       if (response.text) pushHistory(response.text.trim())
       return
@@ -256,12 +281,15 @@ Recent history of this task:\n${history.length > 0 ? history.join('\n') : '(noth
         continue
       }
 
+      log.info(`[autonomousTask] executing ${callName} args=${JSON.stringify(callArgs)}`)
       let result: Record<string, unknown>
       try {
         result = await executeComputerUseAction(callName, callArgs)
       } catch (err) {
         result = { error: err instanceof Error ? err.message : String(err) }
+        log.error(`[autonomousTask] ${callName} threw:`, err)
       }
+      log.info(`[autonomousTask] ${callName} result=${JSON.stringify(result)}`)
       const intent = typeof callArgs.intent === 'string' ? callArgs.intent : ''
       pushHistory(`${callName}${intent ? ` (${intent})` : ''} -> ${JSON.stringify(result)}`)
       responseParts.push(createPartFromFunctionResponse(call.id ?? callName, callName, result))
