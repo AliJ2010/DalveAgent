@@ -14,6 +14,7 @@ import * as composio from './composio'
 import * as screenControl from './screenControl'
 import * as autonomousTask from './autonomousTask'
 import * as appControl from './appControl'
+import * as uiAutomation from './uiAutomation'
 import * as journal from './journal'
 import type { AgentConfig, VoiceEvent } from '@shared/types'
 
@@ -40,7 +41,9 @@ The only hard limit: never type a password, payment card number, or other creden
 
 Screen sharing only ever watches the user's main/primary monitor — if something they mention isn't visible there, it may be on a different monitor you can't see; say so rather than guessing or clicking blind.
 
-Clicking the wrong thing (e.g. the wrong contact in a chat list, the wrong item in a similar-looking row) is the single most common way you fail at this — the video feed is compressed and small text is easy to misread, so never click from a single glance. Before clicking something where similar-looking rows could be confused, quickly move_mouse there first — that's free — and confirm in the next frame that the cursor actually landed on the right element before you click_mouse; skip this check when the target is obvious and unambiguous. If a click turns out to have hit the wrong thing, say so immediately and correct it rather than continuing as if it worked. When a task spans multiple turns (e.g. "keep this conversation going without me"), re-check the screen state at the start of each new step rather than assuming it still matches what you last saw — things move, replies arrive, windows change focus.
+On Windows, click_element is the DEFAULT way to interact with anything that has a visible label — buttons, links, menu items, tabs, form fields. It reads the real OS accessibility tree and clicks the actual live position of the named element, re-checked fresh at the moment of the click — it cannot go stale, and it cannot miss because of compressed or small video. Reach for click_mouse/move_mouse (pixel coordinates from the video feed) only for things with no accessible name — canvas content, games, drawing surfaces — or when click_element reports it couldn't find a match (it's not implemented on macOS yet, so fall back there too). Use find_elements when you're unsure of an element's exact name or the video feed is ambiguous — it costs nothing and tells you what's really there instead of you guessing.
+
+Clicking the wrong thing (e.g. the wrong contact in a chat list, the wrong item in a similar-looking row) is the single most common way you fail at this — the video feed is compressed and small text is easy to misread, so never click from a single glance when you're relying on pixel coordinates. Before a coordinate-based click where similar-looking rows could be confused, quickly move_mouse there first — that's free — and confirm in the next frame that the cursor actually landed on the right element before you click_mouse; skip this check when using click_element (it's already precise) or when the target is obvious and unambiguous. If a click turns out to have hit the wrong thing, say so immediately and correct it rather than continuing as if it worked. When a task spans multiple turns (e.g. "keep this conversation going without me"), re-check the screen state at the start of each new step rather than assuming it still matches what you last saw — things move, replies arrive, windows change focus.
 
 Narrate briefly what you're doing as you go, in a sentence or two — not a blow-by-blow of every click, and never a restatement of the goal. Call stop_screen_share when you're done or if asked to stop.
 
@@ -194,6 +197,29 @@ const CLICK_MOUSE_TOOL: FunctionDeclaration = {
       speed: SPEED_PARAM_SCHEMA
     },
     required: ['x', 'y']
+  }
+}
+
+const FIND_ELEMENTS_TOOL: FunctionDeclaration = {
+  name: 'find_elements',
+  description:
+    "Reads the REAL, currently-focused window's accessibility tree and returns every named, clickable/interactive element on it right now — its exact name, type, and whether it's enabled. This is not a guess from a screenshot; it's the same data the OS itself uses. Call this before click_element when you're not certain of an element's exact name, or when the video feed is ambiguous/compressed. Windows only for now — on other platforms this will fail and you should fall back to move_mouse/click_mouse from the video feed instead.",
+  parametersJsonSchema: { type: 'object', properties: {} }
+}
+
+const CLICK_ELEMENT_TOOL: FunctionDeclaration = {
+  name: 'click_element',
+  description:
+    "Clicks a UI element by its real accessibility name (e.g. \"Send\", \"Reply\", \"Address and search bar\") instead of a guessed pixel coordinate. This re-reads the OS accessibility tree fresh at the moment of the call and clicks the actual live position of the best-matching element — so it can't go stale between when you saw something and when you act on it, and it can't miss due to compressed/small video. STRONGLY PREFER this over click_mouse for anything with a visible label (buttons, links, menu items, tabs, text fields) — reserve click_mouse for canvas/custom-rendered content with no accessible name (games, drawing surfaces, custom video controls). If no good match is found, the response lists the real names actually present so you can retry correctly instead of guessing again. Windows only for now — falls back to click_mouse on other platforms.",
+  parametersJsonSchema: {
+    type: 'object',
+    properties: {
+      name: { type: 'string', description: 'The visible label/name of the element to click, as exactly as you can tell from the screen — matching is fuzzy (case-insensitive, substring-tolerant).' },
+      button: { type: 'string', enum: ['left', 'right', 'middle'], description: 'Defaults to left.' },
+      double: { type: 'boolean', description: 'Double-click instead of a single click.' },
+      speed: SPEED_PARAM_SCHEMA
+    },
+    required: ['name']
   }
 }
 
@@ -355,6 +381,8 @@ async function buildToolsForAgent(agent: AgentConfig | null): Promise<Tool[]> {
     STOP_SCREEN_SHARE_TOOL,
     MOVE_MOUSE_TOOL,
     CLICK_MOUSE_TOOL,
+    FIND_ELEMENTS_TOOL,
+    CLICK_ELEMENT_TOOL,
     TRACE_PATTERN_TOOL,
     TYPE_TEXT_TOOL,
     PRESS_KEY_TOOL,
@@ -744,6 +772,46 @@ async function handleToolCalls(functionCalls: FunctionCall[]): Promise<void> {
           (args.speed as 'instant' | 'visible') ?? 'visible'
         )
         response = { result: 'Clicked.' }
+      } else if (fc.name === 'find_elements') {
+        if (!uiAutomation.isSupported()) {
+          response = { error: 'UI element reading is only implemented for Windows so far — use the video feed and move_mouse/click_mouse instead.' }
+        } else {
+          const elements = await uiAutomation.findElements()
+          response = {
+            result: elements
+              .slice(0, 80)
+              .map((e) => `${e.name} (${e.controlType}${e.isEnabled ? '' : ', disabled'})`)
+              .join('\n')
+          }
+        }
+      } else if (fc.name === 'click_element') {
+        const targetName = String(args.name ?? '').trim()
+        if (!uiAutomation.isSupported()) {
+          response = { error: 'UI element clicking is only implemented for Windows so far — use click_mouse from the video feed instead.' }
+        } else if (!targetName) {
+          response = { error: 'No element name given.' }
+        } else {
+          const located = await uiAutomation.locateElement(targetName)
+          if (!located.found || located.centerX === undefined || located.centerY === undefined) {
+            response = {
+              status: 'FAILED',
+              error: `No enabled, on-screen element matching "${targetName}" was found.`,
+              candidates: located.candidates ?? []
+            }
+          } else {
+            await screenControl.clickMouse(
+              located.centerX,
+              located.centerY,
+              (args.button as 'left' | 'right' | 'middle') ?? 'left',
+              Boolean(args.double),
+              (args.speed as 'instant' | 'visible') ?? 'visible'
+            )
+            response = {
+              status: 'SUCCESS',
+              result: `Clicked "${located.element?.name}" (${located.element?.controlType}).`
+            }
+          }
+        }
       } else if (fc.name === 'trace_pattern') {
         await screenControl.tracePattern(
           (args.pattern as screenControl.TracePattern) ?? 'circle',
