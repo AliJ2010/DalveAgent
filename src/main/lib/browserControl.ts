@@ -37,8 +37,10 @@ function profileDir(): string {
  * global cache it would otherwise silently default to and not find anything in.
  */
 function resolveBrowsersPath(): string | null {
+  // extraResources (electron-builder.yml) copies straight into resourcesPath, untouched by the
+  // asar entirely — no "app.asar.unpacked" prefix, unlike files matched via asarUnpack.
   const bundled = app.isPackaged
-    ? join(process.resourcesPath, 'app.asar.unpacked', 'playwright-browsers')
+    ? join(process.resourcesPath, 'playwright-browsers')
     : join(app.getAppPath(), 'playwright-browsers')
   return existsSync(bundled) ? bundled : null
 }
