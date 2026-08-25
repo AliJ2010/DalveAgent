@@ -52,3 +52,7 @@ publish:
   provider: github
   owner: AliJ2010
   repo: DalveAgent
+  # Without this, electron-builder's GitHub publisher creates the release as a DRAFT by
+  # default — invisible to everyone but the repo owner, and invisible to /releases/latest, which
+  # is exactly why the last run's release silently never showed up anywhere.
+  releaseType: release
