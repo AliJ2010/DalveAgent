@@ -100,6 +100,16 @@ export type VoiceEvent =
   | { type: 'error'; message: string }
   /** Fires when the active agent changes for any reason, including DALVE switching it herself mid-conversation. */
   | { type: 'activeAgentChanged'; agentId: string | null }
+  /** Fires around a tool call actually executing — lets the UI show "working" instead of leaving
+   *  the user unsure whether anything is happening between "I'll do that" and a spoken result. */
+  | { type: 'toolActivity'; active: boolean; label?: string }
+
+export type ScreenControlEvent = { type: 'active'; active: boolean }
+
+export type AutonomousTaskEvent =
+  | { type: 'started'; goal: string }
+  | { type: 'stopped'; reason: string }
+  | { type: 'log'; text: string }
 
 export const PRIORITY_COMPOSIO_APPS: { key: string; name: string }[] = [
   { key: 'gmail', name: 'Gmail' },

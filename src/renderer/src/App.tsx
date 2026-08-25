@@ -7,14 +7,29 @@ import { IntegrationsScreen } from './components/IntegrationsScreen'
 import { SettingsScreen } from './components/SettingsScreen'
 import { KnowledgeScreen } from './components/KnowledgeScreen'
 import { AgentsCanvas } from './components/AgentsCanvas'
+import { ScreenControlOverlay } from './components/ScreenControlOverlay'
+import { AutonomousTaskOverlay } from './components/AutonomousTaskOverlay'
 import { useUiStore } from './state/uiStore'
-import { initVoiceBridge, toggleVoiceSession } from './lib/voiceSession'
+import { useSettingsStore } from './state/settingsStore'
+import {
+  initVoiceBridge,
+  initScreenControlBridge,
+  initAutonomousTaskBridge,
+  initWakeTriggerBridge,
+  toggleVoiceSession
+} from './lib/voiceSession'
 
 function App(): React.JSX.Element {
   const screen = useUiStore((s) => s.screen)
 
   useEffect(() => {
     initVoiceBridge()
+    initScreenControlBridge()
+    initAutonomousTaskBridge()
+    initWakeTriggerBridge()
+    // Starts the always-on wake-word mic feed immediately at boot (not just when the Settings
+    // screen happens to be open) — the whole point is that it works while minimized to the tray.
+    void useSettingsStore.getState().refresh()
   }, [])
 
   useEffect(() => {
@@ -32,6 +47,8 @@ function App(): React.JSX.Element {
 
   return (
     <div style={{ display: 'flex', position: 'fixed', inset: 0, background: 'var(--c-void)' }}>
+      <ScreenControlOverlay />
+      <AutonomousTaskOverlay />
       <Sidebar />
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative', minWidth: 0 }}>
         <TopBar />

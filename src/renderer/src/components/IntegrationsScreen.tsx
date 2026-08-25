@@ -32,6 +32,14 @@ export function IntegrationsScreen(): React.JSX.Element {
     return q ? catalog.filter((c) => c.name.toLowerCase().includes(q)) : catalog
   }, [catalog, query])
 
+  const filteredEntries = useMemo(
+    () => filtered.map((c) => mergeEntry(c.slug, c.name, c, connectionByKey.get(c.slug))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [filtered, settings?.composioConnections]
+  )
+  const connectedEntries = filteredEntries.filter((e) => e.connected)
+  const otherEntries = filteredEntries.filter((e) => !e.connected)
+
   async function handleOAuthConnect(entry: MergedEntry): Promise<string | undefined> {
     try {
       await connectComposioApp(entry.slug, entry.name, entry.logo)
@@ -117,6 +125,35 @@ export function IntegrationsScreen(): React.JSX.Element {
           <div style={{ fontSize: 12, color: '#e0785a', marginBottom: 16 }}>{catalogError}</div>
         )}
 
+        {connectedEntries.length > 0 && (
+          <>
+            <div className="tracked-label" style={{ marginBottom: 10, color: 'var(--c-gold-bright)' }}>
+              Connected ({connectedEntries.length})
+            </div>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+                gap: 12,
+                marginBottom: 28
+              }}
+            >
+              {connectedEntries.map((entry) => (
+                <AppCard
+                  key={entry.slug}
+                  entry={entry}
+                  connecting={connectingApp === entry.slug}
+                  disabled={!settings?.composioApiKeySet}
+                  onConnect={() => handleOAuthConnect(entry)}
+                  onConnectWithApiKey={(key) => handleApiKeyConnect(entry, key)}
+                  onEnableNoAuth={() => handleEnableNoAuth(entry)}
+                  onDisconnect={() => disconnectComposioApp(entry.slug)}
+                />
+              ))}
+            </div>
+          </>
+        )}
+
         <div className="tracked-label" style={{ marginBottom: 10 }}>
           {query ? `Results for "${query}"` : `All apps (${catalog.length})`}
         </div>
@@ -127,21 +164,18 @@ export function IntegrationsScreen(): React.JSX.Element {
             gap: 12
           }}
         >
-          {filtered.map((c) => {
-            const entry = mergeEntry(c.slug, c.name, c, connectionByKey.get(c.slug))
-            return (
-              <AppCard
-                key={entry.slug}
-                entry={entry}
-                connecting={connectingApp === entry.slug}
-                disabled={!settings?.composioApiKeySet}
-                onConnect={() => handleOAuthConnect(entry)}
-                onConnectWithApiKey={(key) => handleApiKeyConnect(entry, key)}
-                onEnableNoAuth={() => handleEnableNoAuth(entry)}
-                onDisconnect={() => disconnectComposioApp(entry.slug)}
-              />
-            )
-          })}
+          {otherEntries.map((entry) => (
+            <AppCard
+              key={entry.slug}
+              entry={entry}
+              connecting={connectingApp === entry.slug}
+              disabled={!settings?.composioApiKeySet}
+              onConnect={() => handleOAuthConnect(entry)}
+              onConnectWithApiKey={(key) => handleApiKeyConnect(entry, key)}
+              onEnableNoAuth={() => handleEnableNoAuth(entry)}
+              onDisconnect={() => disconnectComposioApp(entry.slug)}
+            />
+          ))}
         </div>
       </div>
     </div>

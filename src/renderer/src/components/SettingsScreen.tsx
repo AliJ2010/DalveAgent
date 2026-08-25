@@ -150,19 +150,34 @@ export function SettingsScreen(): React.JSX.Element {
           </p>
         </Section>
 
+        <Section title="Global shortcut">
+          <p style={{ fontSize: 13, color: 'var(--c-text-1)' }}>
+            Press <strong>Ctrl+Alt+D</strong> anywhere, anytime — DALVE jumps to your third
+            monitor, goes fullscreen, and starts listening immediately.
+          </p>
+          <p style={{ fontSize: 12, color: 'var(--c-text-3)', marginTop: 8 }}>
+            Works even when the window is hidden in the tray or another app has focus. Voice
+            wake-word ("Hey DALVE") was tried but wasn't reliable enough, so this hotkey is the
+            replacement — instant, free, and doesn't depend on speech recognition at all.
+          </p>
+        </Section>
+
         <Section title="Connected apps">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {(settings?.composioConnections ?? []).map((c) => (
-              <div
-                key={c.appKey}
-                style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--c-text-2)' }}
-              >
-                <span>{c.appName}</span>
-                <span style={{ color: c.connected ? '#6fe08a' : 'var(--c-text-3)' }}>
-                  {c.connected ? 'Connected' : 'Not connected'}
-                </span>
-              </div>
-            ))}
+            {(settings?.composioConnections ?? [])
+              .filter((c) => c.connected)
+              .map((c) => (
+                <div
+                  key={c.appKey}
+                  style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--c-text-2)' }}
+                >
+                  <span>{c.appName}</span>
+                  <span style={{ color: '#6fe08a' }}>Connected</span>
+                </div>
+              ))}
+            {(settings?.composioConnections ?? []).filter((c) => c.connected).length === 0 && (
+              <span style={{ fontSize: 13, color: 'var(--c-text-3)' }}>Nothing connected yet.</span>
+            )}
           </div>
           <p style={{ fontSize: 12, color: 'var(--c-text-3)', marginTop: 8 }}>
             Manage connections from the Integrations screen.

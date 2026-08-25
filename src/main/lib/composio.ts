@@ -1,9 +1,41 @@
+import { app } from 'electron'
+import { join } from 'path'
+import { readFileSync, writeFileSync, existsSync } from 'fs'
 import { Composio, AuthScheme, AuthConfigTypes } from '@composio/core'
 import { settingsStore } from './settingsStore'
 import type { ComposioAuthScheme, ComposioCatalogEntry } from '@shared/types'
 
 // Single local identity — DALVE runs as one user's desktop assistant, not a multi-tenant service.
 const COMPOSIO_USER_ID = 'dalve-local-user'
+
+// Composio's full catalog is 1300+ apps with logos/descriptions — genuinely slow to fetch (real
+// network + payload size, not a bug), so it's worth persisting to disk rather than re-fetching
+// on every app launch. Refreshed automatically once a day, or immediately after the API key changes.
+const CATALOG_CACHE_TTL_MS = 24 * 60 * 60 * 1000
+
+function catalogCachePath(): string {
+  return join(app.getPath('userData'), 'dalve-catalog-cache.json')
+}
+
+function loadCatalogFromDisk(): ComposioCatalogEntry[] | null {
+  try {
+    const path = catalogCachePath()
+    if (!existsSync(path)) return null
+    const { fetchedAt, entries } = JSON.parse(readFileSync(path, 'utf-8'))
+    if (Date.now() - fetchedAt > CATALOG_CACHE_TTL_MS) return null
+    return entries
+  } catch {
+    return null
+  }
+}
+
+function saveCatalogToDisk(entries: ComposioCatalogEntry[]): void {
+  try {
+    writeFileSync(catalogCachePath(), JSON.stringify({ fetchedAt: Date.now(), entries }), 'utf-8')
+  } catch (err) {
+    console.error('[composio] failed to persist catalog cache:', err)
+  }
+}
 
 export interface ComposioFunctionDeclaration {
   name: string
@@ -29,6 +61,11 @@ function getClient(): Composio {
 export function resetComposioClient(): void {
   client = null
   catalogCache = null
+  try {
+    if (existsSync(catalogCachePath())) writeFileSync(catalogCachePath(), '')
+  } catch {
+    // best-effort; a stale cache file just means one extra slow fetch, not a correctness issue
+  }
 }
 
 /** Throws with a clear message if the given key is rejected by Composio. */
@@ -93,9 +130,19 @@ function getRawClient(): RawComposioClient {
   return (getClient() as unknown as { client: RawComposioClient }).client
 }
 
-/** Fetches (and caches) the full Composio toolkit catalog, each with a logo/auth scheme. */
+/**
+ * Fetches the full Composio toolkit catalog, each with a logo/auth scheme. Cached in memory for
+ * the process lifetime, and on disk for up to a day, since the real fetch (1300+ apps with full
+ * metadata) is genuinely slow over the network — this makes only the very first load slow.
+ */
 export async function listToolkitCatalog(): Promise<ComposioCatalogEntry[]> {
   if (catalogCache) return catalogCache
+
+  const fromDisk = loadCatalogFromDisk()
+  if (fromDisk) {
+    catalogCache = fromDisk
+    return fromDisk
+  }
 
   const raw = getRawClient()
   const entries: ComposioCatalogEntry[] = []
@@ -118,12 +165,15 @@ export async function listToolkitCatalog(): Promise<ComposioCatalogEntry[]> {
   }
 
   catalogCache = entries
+  saveCatalogToDisk(entries)
   return entries
 }
 
-async function ensureAuthConfigId(toolkitSlug: string): Promise<string> {
-  const cached = settingsStore.getComposioAuthConfigId(toolkitSlug)
-  if (cached) return cached
+async function ensureAuthConfigId(toolkitSlug: string, forceFresh = false): Promise<string> {
+  if (!forceFresh) {
+    const cached = settingsStore.getComposioAuthConfigId(toolkitSlug)
+    if (cached) return cached
+  }
 
   const composio = getClient()
   const created = await composio.authConfigs.create(toolkitSlug, {
@@ -134,30 +184,59 @@ async function ensureAuthConfigId(toolkitSlug: string): Promise<string> {
   return created.id
 }
 
+function looksLikeStaleAuthConfig(err: unknown): boolean {
+  const cause = err instanceof Error ? (err as Error & { cause?: unknown }).cause : undefined
+  const text = `${err instanceof Error ? err.message : String(err)} ${cause instanceof Error ? cause.message : ''}`
+  return /auth.?config/i.test(text) && /not.?found/i.test(text)
+}
+
+/**
+ * Runs a connect action against the cached auth config, and transparently retries once with a
+ * freshly created one if the cached id has gone stale — e.g. deleted via Composio's own
+ * dashboard, which happened here: disconnecting in-app only clears our local flag, so a user
+ * who also deletes things on Composio's side is left with a locally-cached id pointing at
+ * nothing. Without this, every future connect attempt for that toolkit fails forever with a
+ * confusing "Auth config not found" error until someone notices and clears local state by hand.
+ */
+async function withAuthConfig<T>(
+  toolkitSlug: string,
+  fn: (authConfigId: string) => Promise<T>
+): Promise<T> {
+  const authConfigId = await ensureAuthConfigId(toolkitSlug)
+  try {
+    return await fn(authConfigId)
+  } catch (err) {
+    if (!looksLikeStaleAuthConfig(err)) throw err
+    console.error(`[composio] cached auth config for ${toolkitSlug} is stale, recreating:`, err)
+    const freshId = await ensureAuthConfigId(toolkitSlug, true)
+    return fn(freshId)
+  }
+}
+
 /** Starts an OAuth connection for a toolkit and returns the URL to open. */
 export async function beginOAuthConnect(
   toolkitSlug: string
 ): Promise<{ redirectUrl: string; connectedAccountId: string }> {
   const composio = getClient()
-  const authConfigId = await ensureAuthConfigId(toolkitSlug)
-  const connectionRequest = await composio.connectedAccounts.link(COMPOSIO_USER_ID, authConfigId)
-
-  if (!connectionRequest.redirectUrl) {
-    throw new Error('Composio did not return a connection URL.')
-  }
-
-  return { redirectUrl: connectionRequest.redirectUrl, connectedAccountId: connectionRequest.id }
+  return withAuthConfig(toolkitSlug, async (authConfigId) => {
+    const connectionRequest = await composio.connectedAccounts.link(COMPOSIO_USER_ID, authConfigId)
+    if (!connectionRequest.redirectUrl) {
+      throw new Error('Composio did not return a connection URL.')
+    }
+    return { redirectUrl: connectionRequest.redirectUrl, connectedAccountId: connectionRequest.id }
+  })
 }
 
 /** Connects an API-key-based app like Stripe directly, no browser popup needed. */
 export async function connectWithApiKey(toolkitSlug: string, apiKeyValue: string): Promise<string> {
   const composio = getClient()
-  const authConfigId = await ensureAuthConfigId(toolkitSlug)
-  const connectionRequest = await composio.connectedAccounts.initiate(COMPOSIO_USER_ID, authConfigId, {
-    config: AuthScheme.APIKey({ api_key: apiKeyValue })
+  return withAuthConfig(toolkitSlug, async (authConfigId) => {
+    const connectionRequest = await composio.connectedAccounts.initiate(COMPOSIO_USER_ID, authConfigId, {
+      config: AuthScheme.APIKey({ api_key: apiKeyValue })
+    })
+    await composio.connectedAccounts.waitForConnection(connectionRequest.id, 15000)
+    return connectionRequest.id
   })
-  await composio.connectedAccounts.waitForConnection(connectionRequest.id, 15000)
-  return connectionRequest.id
 }
 
 export async function waitForConnection(connectedAccountId: string, timeoutMs = 120000): Promise<boolean> {

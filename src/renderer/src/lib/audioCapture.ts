@@ -22,6 +22,11 @@ export async function startAudioCapture(
   })
 
   const audioContext = new AudioContext({ sampleRate: 16000 })
+  // Chromium can create a new AudioContext already 'suspended' pending a user gesture. A session
+  // started via the global hotkey (main process IPC, not a real DOM click/keypress) doesn't
+  // count as one, so without an explicit resume() it can silently never produce a single audio
+  // frame. Harmless no-op if it was already running (e.g. triggered by the spacebar).
+  void audioContext.resume()
   const source = audioContext.createMediaStreamSource(stream)
   // ScriptProcessorNode is deprecated in favor of AudioWorklet, but needs no extra
   // module file to load and is supported everywhere — fine for v1.

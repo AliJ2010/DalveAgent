@@ -1,6 +1,13 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
-import type { AgentConfig, ComposioCatalogEntry, SettingsState, VoiceEvent } from '@shared/types'
+import type {
+  AgentConfig,
+  AutonomousTaskEvent,
+  ComposioCatalogEntry,
+  ScreenControlEvent,
+  SettingsState,
+  VoiceEvent
+} from '@shared/types'
 
 const dalveApi = {
   settings: {
@@ -64,6 +71,33 @@ const dalveApi = {
   },
   shell: {
     openExternal: (url: string): Promise<void> => ipcRenderer.invoke('shell:openExternal', url)
+  },
+  screenControl: {
+    stop: (): Promise<void> => ipcRenderer.invoke('screenControl:stop'),
+    onEvent: (callback: (event: ScreenControlEvent) => void): (() => void) => {
+      const listener = (_e: Electron.IpcRendererEvent, payload: ScreenControlEvent): void =>
+        callback(payload)
+      ipcRenderer.on('screenControl:event', listener)
+      return () => ipcRenderer.removeListener('screenControl:event', listener)
+    }
+  },
+  wake: {
+    onTriggered: (callback: () => void): (() => void) => {
+      const listener = (): void => callback()
+      ipcRenderer.on('wake:triggered', listener)
+      return () => ipcRenderer.removeListener('wake:triggered', listener)
+    }
+  },
+  autonomousTask: {
+    stop: (): Promise<void> => ipcRenderer.invoke('autonomousTask:stop'),
+    getState: (): Promise<{ active: boolean; goal: string | null }> =>
+      ipcRenderer.invoke('autonomousTask:getState'),
+    onEvent: (callback: (event: AutonomousTaskEvent) => void): (() => void) => {
+      const listener = (_e: Electron.IpcRendererEvent, payload: AutonomousTaskEvent): void =>
+        callback(payload)
+      ipcRenderer.on('autonomousTask:event', listener)
+      return () => ipcRenderer.removeListener('autonomousTask:event', listener)
+    }
   }
 }
 

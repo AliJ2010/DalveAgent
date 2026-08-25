@@ -117,3 +117,19 @@ button:disabled {
 a {
   color: var(--c-gold-bright);
 }
+
+@keyframes dalve-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* A real heartbeat double-thump, not a slow sine wave — meant to read unmistakably as "active
+   right now" at a glance, distinct from the sphere's own ambient idle motion. */
+@keyframes dalve-heartbeat {
+  0% { transform: scale(1); }
+  14% { transform: scale(1.09); }
+  28% { transform: scale(1); }
+  42% { transform: scale(1.06); }
+  70% { transform: scale(1); }
+  100% { transform: scale(1); }
+}

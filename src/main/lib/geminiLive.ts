@@ -11,6 +11,9 @@ import { shell, type BrowserWindow } from 'electron'
 import { settingsStore } from './settingsStore'
 import { agentStore } from './agentStore'
 import * as composio from './composio'
+import * as screenControl from './screenControl'
+import * as autonomousTask from './autonomousTask'
+import * as journal from './journal'
 import type { AgentConfig, VoiceEvent } from '@shared/types'
 
 // The newest native-audio-dialog Live model as of build time. Re-check
@@ -20,13 +23,32 @@ const LIVE_MODEL = 'gemini-3.1-flash-live-preview'
 
 const CHAIN_OF_COMMAND = `Chain of command: the user is the ultimate authority over this entire system. DALVE is the primary orchestrator and answers directly to the user; every other agent answers to DALVE and, through her, to the user. Always defer to the user's explicit instructions over anything else.`
 
-const DALVE_SYSTEM_PROMPT = `You are DALVE, a voice-first AI operating system. You're the user's single point of contact — they talk to you, and only you by default; you coordinate everything else behind the scenes. Speak naturally and conversationally, like a sharp, capable assistant sitting next to them, not like a chatbot reading a script. Keep responses concise since this is a spoken conversation. When you don't know something current, use web search grounding rather than guessing. You can open websites, create new agents, switch the user to talk directly with an existing agent, and remember facts for later — actually call those tools rather than just claiming you did. If the user asks who you're connected to or what agents/bots exist, use list_agents rather than guessing.`
+const DALVE_SYSTEM_PROMPT = `You are DALVE, a voice-first AI operating system. You're the user's single point of contact — they talk to you, and only you by default; you coordinate everything else behind the scenes. Speak naturally and conversationally, like a sharp, capable assistant sitting next to them, not like a chatbot reading a script. Keep responses concise since this is a spoken conversation. When you don't know something current, use web search grounding rather than guessing. You can open websites, create new agents, switch the user to talk directly with an existing agent, and remember facts for later — actually call those tools rather than just claiming you did. If the user asks who you're connected to or what agents/bots exist, use list_agents rather than guessing.
+
+When given a task, get straight to doing it. NEVER repeat, paraphrase, or summarize the user's instruction back to them before acting — that includes at the start of a task, mid-task, and when resuming after a pause. A short natural acknowledgment ("on it," "sure") is fine; anything longer than that before you've actually started acting is a mistake. Only pause to ask a real clarifying question when you're genuinely unsure what the user means; don't ask for permission to proceed once you understand what they want, and don't stall or go quiet — if you're unsure of the next concrete step, say so and try something rather than freezing.
+
+You are expected to be genuinely autonomous once given a goal: figure things out, try things, adapt when something doesn't work, and keep making forward progress without checking in after every little step. If your first approach doesn't pan out (a link doesn't work, a page looks different than expected), think of another way to get there yourself — search differently, try a different site, look at another monitor — rather than reporting the obstacle back to the user and waiting. Only come back to the user when you're truly stuck after multiple genuine attempts, need information only they have, or the task is done.
+
+You can also see and physically control the user's computer, like a partner sitting at the keyboard with them. Call start_screen_share to begin watching their screen as a live video feed (roughly one frame per second) — after that you simply see the screen, no separate "look" tool needed. Once sharing is on, you have full standing authorization to move the mouse, click, type, press keys, and scroll — just do it, no permission tool to call first.
+
+CRITICAL RULE, no exceptions: describing a physical action and performing it are two different things, and only the tool call actually does anything — saying words never moves the mouse or types a single character. Never say "clicking now," "moving to his chat," "typing that in," or anything similar UNLESS you are calling click_mouse/move_mouse/type_text/press_key in that exact same turn. If you haven't made the tool call yet, don't describe having done it — narrate AFTER the call resolves, or not at all, never instead of it. Silently claiming an action while doing nothing is the single worst failure mode here — worse than saying nothing, worse than asking a question — because the user has no way to tell the difference between real progress and an empty sentence until they check the screen themselves.
+
+The only hard limit: never type a password, payment card number, or other credential yourself — ask the user to enter sensitive fields themselves.
+
+Screen sharing only ever watches the user's main/primary monitor — if something they mention isn't visible there, it may be on a different monitor you can't see; say so rather than guessing or clicking blind.
+
+Clicking the wrong thing (e.g. the wrong contact in a chat list, the wrong item in a similar-looking row) is the single most common way you fail at this — the video feed is compressed and small text is easy to misread, so never click from a single glance. Before clicking something where similar-looking rows could be confused, quickly move_mouse there first — that's free — and confirm in the next frame that the cursor actually landed on the right element before you click_mouse; skip this check when the target is obvious and unambiguous. If a click turns out to have hit the wrong thing, say so immediately and correct it rather than continuing as if it worked. When a task spans multiple turns (e.g. "keep this conversation going without me"), re-check the screen state at the start of each new step rather than assuming it still matches what you last saw — things move, replies arrive, windows change focus.
+
+Narrate briefly what you're doing as you go, in a sentence or two — not a blow-by-blow of every click, and never a restatement of the goal. Call stop_screen_share when you're done or if asked to stop.
+
+If the user asks you to keep handling something on your own after they stop talking to you — e.g. "keep replying to this conversation without me," "watch for a reply and handle it" — call start_autonomous_task with a clear one-sentence goal. That hands the task to a background loop that checks the screen every ~20 seconds and acts on its own. It keeps going indefinitely until it decides the goal is complete, until the user stops it from the app, or until you call stop_autonomous_task. Only start one for something the user actually asked to be handled unattended — never on your own initiative — and still never enter passwords or payment details even in this mode.`
 
 const AGENT_COLORS = ['#d4af37', '#c9a227', '#e0b84a', '#f2d06b', '#b8860b', '#eecb6f', '#a9812c']
 
 const OPEN_URL_TOOL: FunctionDeclaration = {
   name: 'open_url',
-  description: "Open a website in the user's default web browser.",
+  description:
+    "Open a website in the user's default web browser.",
   parametersJsonSchema: {
     type: 'object',
     properties: {
@@ -91,12 +113,135 @@ const REMEMBER_FACT_TOOL: FunctionDeclaration = {
   }
 }
 
+const START_SCREEN_SHARE_TOOL: FunctionDeclaration = {
+  name: 'start_screen_share',
+  description:
+    "Starts watching the user's screen as a live video feed so you can see what they're looking at. Call this before trying to describe, click, or type anything on their screen.",
+  parametersJsonSchema: { type: 'object', properties: {} }
+}
+
+const STOP_SCREEN_SHARE_TOOL: FunctionDeclaration = {
+  name: 'stop_screen_share',
+  description: "Stops watching the user's screen and gives up physical control until requested again.",
+  parametersJsonSchema: { type: 'object', properties: {} }
+}
+
+const MOVE_MOUSE_TOOL: FunctionDeclaration = {
+  name: 'move_mouse',
+  description: "Moves the mouse cursor to a pixel position on the user's screen, based on what you see in the shared video feed.",
+  parametersJsonSchema: {
+    type: 'object',
+    properties: {
+      x: { type: 'number', description: 'X pixel coordinate, left edge of the screen is 0.' },
+      y: { type: 'number', description: 'Y pixel coordinate, top edge of the screen is 0.' }
+    },
+    required: ['x', 'y']
+  }
+}
+
+const CLICK_MOUSE_TOOL: FunctionDeclaration = {
+  name: 'click_mouse',
+  description: 'Moves to and clicks a pixel position on screen.',
+  parametersJsonSchema: {
+    type: 'object',
+    properties: {
+      x: { type: 'number', description: 'X pixel coordinate.' },
+      y: { type: 'number', description: 'Y pixel coordinate.' },
+      button: { type: 'string', enum: ['left', 'right', 'middle'], description: 'Defaults to left.' },
+      double: { type: 'boolean', description: 'Double-click instead of a single click.' }
+    },
+    required: ['x', 'y']
+  }
+}
+
+const TYPE_TEXT_TOOL: FunctionDeclaration = {
+  name: 'type_text',
+  description:
+    'Types literal text at the current cursor/focus position, as if typed on the keyboard. Never use this for passwords, payment card numbers, or other credentials — ask the user to type those themselves.',
+  parametersJsonSchema: {
+    type: 'object',
+    properties: { text: { type: 'string', description: 'The exact text to type.' } },
+    required: ['text']
+  }
+}
+
+const PRESS_KEY_TOOL: FunctionDeclaration = {
+  name: 'press_key',
+  description:
+    'Presses a single keyboard key, optionally with modifiers (e.g. Enter, Escape, Tab, or control+c).',
+  parametersJsonSchema: {
+    type: 'object',
+    properties: {
+      key: { type: 'string', description: 'Key name, e.g. "enter", "escape", "tab", "c", "a".' },
+      modifiers: {
+        type: 'array',
+        items: { type: 'string', enum: ['alt', 'command', 'control', 'shift'] },
+        description: 'Modifier keys held while pressing, e.g. ["control"] for Ctrl+C.'
+      }
+    },
+    required: ['key']
+  }
+}
+
+const SCROLL_TOOL: FunctionDeclaration = {
+  name: 'scroll',
+  description: "Scrolls the page/window under the cursor. Never needs permission — it doesn't submit or change anything.",
+  parametersJsonSchema: {
+    type: 'object',
+    properties: {
+      deltaX: { type: 'number', description: 'Horizontal scroll amount, positive scrolls right.' },
+      deltaY: { type: 'number', description: 'Vertical scroll amount, positive scrolls down.' }
+    },
+    required: ['deltaX', 'deltaY']
+  }
+}
+
+const START_AUTONOMOUS_TASK_TOOL: FunctionDeclaration = {
+  name: 'start_autonomous_task',
+  description:
+    'Hands off a task to a background loop that keeps watching the screen and acting on it (checking every ~20s) even after the user stops talking — with standing permission to act on this specific goal without asking again. Only call this when the user explicitly asks you to keep handling something without them present.',
+  parametersJsonSchema: {
+    type: 'object',
+    properties: {
+      goal: { type: 'string', description: 'One clear sentence describing exactly what to keep doing, e.g. "Reply to Sarah\'s WhatsApp chat until we confirm Tuesday at 3pm works."' }
+    },
+    required: ['goal']
+  }
+}
+
+const STOP_AUTONOMOUS_TASK_TOOL: FunctionDeclaration = {
+  name: 'stop_autonomous_task',
+  description: 'Stops the currently running background autonomous task, if any.',
+  parametersJsonSchema: { type: 'object', properties: {} }
+}
+
 let session: Session | null = null
 let win: BrowserWindow | null = null
 let activeAgentId: string | null = null
 let sessionEpoch = 0
 /** Set by the switch_agent tool; the actual switch happens once the current turn finishes speaking. */
 let pendingSwitchAgentId: string | null | undefined
+
+// Transcripts arrive from Gemini as incremental deltas, accumulated turn-by-turn in the renderer
+// (voiceStore) for display — these mirror that same accumulation on the main-process side purely
+// so a COMPLETE turn can be written to the durable journal once, rather than persisting every
+// partial delta.
+let userTurnBuffer = ''
+let dalveTurnBuffer = ''
+// Tracks whether a real tool call happened during the current turn — backs the corrective nudge
+// in handleMessage's turnComplete branch, which catches the observed failure mode where the
+// model narrates a physical action ("clicking now") without ever calling the tool behind it.
+let toolCalledThisTurn = false
+
+const ACTION_CLAIM_PATTERN =
+  /\b(click(?:ing|ed)?|mov(?:e|ing|ed)|typ(?:e|ing|ed)|press(?:ing|ed)?|scroll(?:ing|ed)?)\b/i
+
+function flushJournalBuffers(dalveLabel: string): void {
+  if (userTurnBuffer.trim()) journal.appendLine('user', userTurnBuffer)
+  if (dalveTurnBuffer.trim()) journal.appendLine('dalve', dalveTurnBuffer, dalveLabel)
+  userTurnBuffer = ''
+  dalveTurnBuffer = ''
+}
 
 export function attachWindow(window: BrowserWindow): void {
   win = window
@@ -132,7 +277,16 @@ async function buildToolsForAgent(agent: AgentConfig | null): Promise<Tool[]> {
     OPEN_URL_TOOL,
     LIST_AGENTS_TOOL,
     SWITCH_AGENT_TOOL,
-    REMEMBER_FACT_TOOL
+    REMEMBER_FACT_TOOL,
+    START_SCREEN_SHARE_TOOL,
+    STOP_SCREEN_SHARE_TOOL,
+    MOVE_MOUSE_TOOL,
+    CLICK_MOUSE_TOOL,
+    TYPE_TEXT_TOOL,
+    PRESS_KEY_TOOL,
+    SCROLL_TOOL,
+    START_AUTONOMOUS_TASK_TOOL,
+    STOP_AUTONOMOUS_TASK_TOOL
   ]
   if (!agent) functionDeclarations.push(CREATE_AGENT_TOOL)
 
@@ -175,9 +329,12 @@ export async function startVoiceSession(agentId: string | null = null): Promise<
   }
 
   if (session) {
+    const oldActiveAgent = activeAgentId ? agentStore.get(activeAgentId) : null
+    flushJournalBuffers(oldActiveAgent?.name ?? 'DALVE')
     const old = session
     session = null
     old.close()
+    screenControl.stopAll()
   }
 
   const myEpoch = ++sessionEpoch
@@ -188,9 +345,22 @@ export async function startVoiceSession(agentId: string | null = null): Promise<
   const ai = new GoogleGenAI({ apiKey })
   const memory = settingsStore.getDalveMemory()
   const memoryNote = memory ? `\n\nThings you've saved to remember from earlier conversations:\n${memory}` : ''
+  // Full conversation history (not just hand-picked facts) so a brand-new session — including
+  // one started because the last one was accidentally closed — has real continuity: "what did
+  // we do today/yesterday" instead of only whatever happened to get saved via remember_fact.
+  // DALVE-only (not sub-agents): this is about the main conversation thread's continuity, not a
+  // per-agent scratchpad, which agent.memory already covers separately.
+  const journalContext = !agent ? journal.getRecentContext() : ''
+  const journalNote = journalContext
+    ? `\n\nFull transcript of recent conversations (most recent last), so you have real continuity across sessions — reference it naturally when relevant, don't recite it:\n${journalContext}`
+    : ''
   const registryNote = `\n\nAgents currently registered:\n${agentRegistrySnapshot()}`
   const systemPrompt =
-    (agent ? agent.systemPrompt : DALVE_SYSTEM_PROMPT) + `\n\n${CHAIN_OF_COMMAND}` + registryNote + memoryNote
+    (agent ? agent.systemPrompt : DALVE_SYSTEM_PROMPT) +
+    `\n\n${CHAIN_OF_COMMAND}` +
+    registryNote +
+    memoryNote +
+    journalNote
   const voiceName = agent ? agent.voice : settingsStore.getDalveVoice()
 
   function resetAgentStatus(): void {
@@ -224,6 +394,8 @@ export async function startVoiceSession(agentId: string | null = null): Promise<
           if (myEpoch !== sessionEpoch) return
           console.error('[geminiLive] onerror:', e)
           resetAgentStatus()
+          flushJournalBuffers(agent?.name ?? 'DALVE')
+          screenControl.stopAll()
           emit({ type: 'error', message: e.message || 'Live session error' })
           emit({ type: 'state', state: 'error' })
           session = null
@@ -233,6 +405,8 @@ export async function startVoiceSession(agentId: string | null = null): Promise<
           if (myEpoch !== sessionEpoch) return
           console.error('[geminiLive] onclose:', { code: e?.code, reason: e?.reason, wasClean: e?.wasClean })
           resetAgentStatus()
+          flushJournalBuffers(agent?.name ?? 'DALVE')
+          screenControl.stopAll()
           session = null
           activeAgentId = null
           if (e && e.code !== 1000) {
@@ -264,13 +438,23 @@ export async function startVoiceSession(agentId: string | null = null): Promise<
 
 function handleMessage(message: LiveServerMessage): void {
   if (message.toolCall?.functionCalls?.length) {
+    console.log('[geminiLive] toolCall received:', message.toolCall.functionCalls.map((f) => f.name))
+    toolCalledThisTurn = true
     void handleToolCalls(message.toolCall.functionCalls)
   }
 
   const content = message.serverContent
-  if (!content) return
+  if (!content) {
+    console.log('[geminiLive] message with no serverContent:', JSON.stringify(message).slice(0, 300))
+    return
+  }
 
   if (content.inputTranscription?.text) {
+    console.log(
+      `[geminiLive] inputTranscription delta (finished=${!!content.inputTranscription.finished}):`,
+      JSON.stringify(content.inputTranscription.text)
+    )
+    userTurnBuffer += content.inputTranscription.text
     emit({
       type: 'inputTranscript',
       text: content.inputTranscription.text,
@@ -279,6 +463,7 @@ function handleMessage(message: LiveServerMessage): void {
   }
 
   if (content.outputTranscription?.text) {
+    dalveTurnBuffer += content.outputTranscription.text
     emit({ type: 'state', state: 'speaking' })
     emit({
       type: 'outputTranscript',
@@ -296,10 +481,28 @@ function handleMessage(message: LiveServerMessage): void {
   }
 
   if (content.interrupted) {
+    console.log('[geminiLive] interrupted')
     emit({ type: 'interrupted' })
   }
 
   if (content.turnComplete) {
+    console.log('[geminiLive] turnComplete received')
+
+    // Catches the observed failure mode directly: DALVE says "clicking now" / "moving to his
+    // chat" but never actually called click_mouse/move_mouse/etc. this turn. Rather than trust
+    // the prompt alone to prevent this, detect it and immediately push back in the same
+    // session — cheaper and more reliable than hoping it doesn't happen again.
+    if (screenControl.isSharing() && !toolCalledThisTurn && ACTION_CLAIM_PATTERN.test(dalveTurnBuffer)) {
+      console.log('[geminiLive] detected narrated-but-not-called action, sending corrective nudge')
+      session?.sendRealtimeInput({
+        text: 'You just described a physical action (clicking/moving/typing/pressing/scrolling) but did not actually call the corresponding tool — nothing happened on screen. If you still intend to do that, call the tool right now.'
+      })
+    }
+    toolCalledThisTurn = false
+
+    const activeAgent = activeAgentId ? agentStore.get(activeAgentId) : null
+    flushJournalBuffers(activeAgent?.name ?? 'DALVE')
+
     emit({ type: 'turnComplete' })
     emit({ type: 'state', state: 'listening' })
 
@@ -316,6 +519,7 @@ function handleMessage(message: LiveServerMessage): void {
 
 async function handleToolCalls(functionCalls: FunctionCall[]): Promise<void> {
   const functionResponses: { id?: string; name?: string; response: Record<string, unknown> }[] = []
+  emit({ type: 'toolActivity', active: true, label: functionCalls[0]?.name })
 
   for (const fc of functionCalls) {
     if (!fc.name) continue
@@ -371,6 +575,44 @@ async function handleToolCalls(functionCalls: FunctionCall[]): Promise<void> {
           settingsStore.appendDalveMemory(fact)
           response = { result: 'Saved.' }
         }
+      } else if (fc.name === 'start_screen_share') {
+        screenControl.startScreenShare((base64Jpeg) => sendVideoFrame(base64Jpeg))
+        screenControl.setControlGranted(true)
+        response = { result: "Now watching the user's screen — full control authorized." }
+      } else if (fc.name === 'stop_screen_share') {
+        screenControl.stopAll()
+        response = { result: 'Stopped watching the screen and released control.' }
+      } else if (fc.name === 'move_mouse') {
+        screenControl.moveMouse(Number(args.x), Number(args.y))
+        response = { result: 'Moved.' }
+      } else if (fc.name === 'click_mouse') {
+        screenControl.clickMouse(
+          Number(args.x),
+          Number(args.y),
+          (args.button as 'left' | 'right' | 'middle') ?? 'left',
+          Boolean(args.double)
+        )
+        response = { result: 'Clicked.' }
+      } else if (fc.name === 'type_text') {
+        screenControl.typeText(String(args.text ?? ''))
+        response = { result: 'Typed.' }
+      } else if (fc.name === 'press_key') {
+        screenControl.pressKey(String(args.key ?? ''), (args.modifiers as string[]) ?? [])
+        response = { result: 'Pressed.' }
+      } else if (fc.name === 'scroll') {
+        screenControl.scroll(Number(args.deltaX ?? 0), Number(args.deltaY ?? 0))
+        response = { result: 'Scrolled.' }
+      } else if (fc.name === 'start_autonomous_task') {
+        const goal = String(args.goal ?? '').trim()
+        if (!goal) {
+          response = { error: 'No goal given.' }
+        } else {
+          autonomousTask.startAutonomousTask(goal)
+          response = { result: `Started — I'll keep handling "${goal}" in the background.` }
+        }
+      } else if (fc.name === 'stop_autonomous_task') {
+        autonomousTask.stopAutonomousTask('stopped by DALVE')
+        response = { result: 'Stopped the background task.' }
       } else {
         response = { result: await composio.executeComposioTool(fc.name, args) }
       }
@@ -383,10 +625,15 @@ async function handleToolCalls(functionCalls: FunctionCall[]): Promise<void> {
   }
 
   session?.sendToolResponse({ functionResponses })
+  emit({ type: 'toolActivity', active: false })
 }
 
 export function sendAudioChunk(base64Pcm16: string): void {
   session?.sendRealtimeInput({ audio: { data: base64Pcm16, mimeType: 'audio/pcm;rate=16000' } })
+}
+
+export function sendVideoFrame(base64Jpeg: string): void {
+  session?.sendRealtimeInput({ video: { data: base64Jpeg, mimeType: 'image/jpeg' } })
 }
 
 export function sendText(text: string): void {
@@ -395,7 +642,10 @@ export function sendText(text: string): void {
 
 export function stopVoiceSession(): void {
   sessionEpoch++ // invalidate any in-flight connect/callbacks
+  screenControl.stopAll()
   if (!session) return
+  const closingAgent = activeAgentId ? agentStore.get(activeAgentId) : null
+  flushJournalBuffers(closingAgent?.name ?? 'DALVE')
   session.close()
   session = null
   if (activeAgentId) {

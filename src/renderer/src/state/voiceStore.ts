@@ -11,8 +11,13 @@ interface VoiceStoreState {
   activeTab: string
   /** Which agent the live session is currently talking to — null means DALVE herself. */
   activeAgentId: string | null
+  /** True while a tool call is actually executing — a visible "working" signal distinct from
+   *  the listening/speaking state, for exactly the "is it slacking or actually doing it" question. */
+  toolActive: boolean
+  toolActiveLabel: string | null
   setSessionState: (s: VoiceSessionState) => void
   setActiveAgentId: (id: string | null) => void
+  setToolActive: (active: boolean, label?: string | null) => void
   addEntry: (entry: Omit<TranscriptEntry, 'id' | 'timestamp'>) => string
   /** Appends a streaming transcript delta to the in-progress entry for that speaker,
    *  starting a new entry the first time it's called for the current turn. For 'dalve'
@@ -30,6 +35,8 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
   sessionState: 'idle',
   activeTab: 'DALVE',
   activeAgentId: null,
+  toolActive: false,
+  toolActiveLabel: null,
   transcript: [
     {
       id: entryId(),
@@ -41,6 +48,7 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
 
   setSessionState: (sessionState) => set({ sessionState }),
   setActiveAgentId: (activeAgentId) => set({ activeAgentId }),
+  setToolActive: (toolActive, label = null) => set({ toolActive, toolActiveLabel: toolActive ? label : null }),
 
   addEntry: (entry) => {
     const id = entryId()

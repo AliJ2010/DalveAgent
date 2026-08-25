@@ -1,10 +1,15 @@
 import { useVoiceStore } from '../state/voiceStore'
+import { useScreenControlStore } from '../state/screenControlStore'
+import { useAutonomousTaskStore } from '../state/autonomousTaskStore'
 import { startAudioCapture, type AudioCaptureHandle } from './audioCapture'
 import { AudioPlayer } from './audioPlayback'
 
 let captureHandle: AudioCaptureHandle | null = null
 let player: AudioPlayer | null = null
 let bridgeInitialized = false
+let screenControlBridgeInitialized = false
+let autonomousTaskBridgeInitialized = false
+let wakeTriggerBridgeInitialized = false
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Something went wrong.'
@@ -53,7 +58,60 @@ export function initVoiceBridge(): void {
       case 'activeAgentChanged':
         store.setActiveAgentId(event.agentId)
         break
+      case 'toolActivity':
+        store.setToolActive(event.active, event.label)
+        break
     }
+  })
+}
+
+/** Registers the screen-control event bridge exactly once, same reasoning as initVoiceBridge. */
+export function initScreenControlBridge(): void {
+  if (screenControlBridgeInitialized) return
+  screenControlBridgeInitialized = true
+
+  window.dalve.screenControl.onEvent((event) => {
+    useScreenControlStore.getState().setActive(event.active)
+  })
+}
+
+/** Registers the autonomous-task event bridge exactly once, same reasoning as initVoiceBridge. */
+export function initAutonomousTaskBridge(): void {
+  if (autonomousTaskBridgeInitialized) return
+  autonomousTaskBridgeInitialized = true
+
+  window.dalve.autonomousTask.getState().then(({ active, goal }) => {
+    useAutonomousTaskStore.getState().setActive(active, goal)
+  })
+
+  window.dalve.autonomousTask.onEvent((event) => {
+    const store = useAutonomousTaskStore.getState()
+    switch (event.type) {
+      case 'started':
+        store.setActive(true, event.goal)
+        break
+      case 'stopped':
+        store.setActive(false, null)
+        break
+      case 'log':
+        store.addLog(event.text)
+        break
+    }
+  })
+}
+
+/**
+ * Registers the wake-trigger bridge exactly once. Main fires 'wake:triggered' whenever it wants
+ * a conversation to actually start (wake-word detection, the global hotkey) — bringing the
+ * window forward alone doesn't put DALVE into a listening state, so this is the piece that
+ * actually starts mic capture once the window is up.
+ */
+export function initWakeTriggerBridge(): void {
+  if (wakeTriggerBridgeInitialized) return
+  wakeTriggerBridgeInitialized = true
+
+  window.dalve.wake.onTriggered(() => {
+    void startVoiceSession(null)
   })
 }
 

@@ -4,6 +4,8 @@ import { agentStore } from '../lib/agentStore'
 import { generateAgentFromPrompt } from '../lib/agentGenerator'
 import * as geminiLive from '../lib/geminiLive'
 import * as composio from '../lib/composio'
+import * as screenControl from '../lib/screenControl'
+import * as autonomousTask from '../lib/autonomousTask'
 import type { AgentConfig } from '@shared/types'
 
 export function registerIpcHandlers(): void {
@@ -56,20 +58,43 @@ export function registerIpcHandlers(): void {
         webPreferences: { sandbox: true }
       })
 
-      let windowClosedEarly = false
-      authWindow.on('closed', () => {
-        windowClosedEarly = true
-      })
-
       authWindow.loadURL(redirectUrl)
 
-      let connected = await composio.waitForConnection(connectedAccountId, 120000)
-      if (!connected && windowClosedEarly) {
+      const windowClosedByUser = new Promise<void>((resolve) => {
+        authWindow.once('closed', () => resolve())
+      })
+
+      // Give the real flow room to breathe — multi-step OAuth (e.g. WhatsApp's Meta embedded
+      // signup: login, business selection, phone verification) can easily run past a couple
+      // of minutes. Previously this force-closed the window at 120s regardless of progress,
+      // which is very likely why "Composio said connected" but the app still showed
+      // disconnected — the user was still completing the flow when we yanked the window.
+      // Only give up this early if the user (or an auto-closing success page) closes it.
+      const connectionSettled = composio.waitForConnection(connectedAccountId, 10 * 60 * 1000)
+
+      const raceResult = await Promise.race([
+        connectionSettled.then((ok) => ({ ok, viaClose: false })),
+        windowClosedByUser.then(() => ({ ok: false, viaClose: true }))
+      ])
+
+      let connected = raceResult.ok
+      if (!connected && raceResult.viaClose) {
         // The window may have closed right as the OAuth flow finished server-side — check once more.
-        connected = await composio.waitForConnection(connectedAccountId, 3000)
+        connected = await composio.waitForConnection(connectedAccountId, 4000)
       }
 
       if (!authWindow.isDestroyed()) authWindow.close()
+
+      // If we gave up via the window closing but the long-running check is still in flight,
+      // let it keep going in the background and update the connection if it eventually lands —
+      // so a flow that genuinely just needed more time doesn't silently require a full retry.
+      if (!connected) {
+        void connectionSettled.then((ok) => {
+          if (ok) {
+            settingsStore.updateComposioConnection(appKey, { appName, logo, connected: true, connectedAccountId })
+          }
+        })
+      }
 
       if (connected) {
         return settingsStore.updateComposioConnection(appKey, {
@@ -154,4 +179,16 @@ export function registerIpcHandlers(): void {
   ipcMain.on('voice:audioChunk', (_e, base64: string) => {
     geminiLive.sendAudioChunk(base64)
   })
+
+  // --- Screen control ---
+  // The global kill-switch: revokes standing permission and stops sharing immediately,
+  // regardless of what DALVE is mid-way through doing.
+  ipcMain.handle('screenControl:stop', () => screenControl.stopAll())
+
+  // --- Autonomous task ---
+  ipcMain.handle('autonomousTask:stop', () => autonomousTask.stopAutonomousTask('stopped by user'))
+  ipcMain.handle('autonomousTask:getState', () => ({
+    active: autonomousTask.isActive(),
+    goal: autonomousTask.getGoal()
+  }))
 }

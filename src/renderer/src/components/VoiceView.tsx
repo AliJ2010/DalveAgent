@@ -12,6 +12,8 @@ const TOPBAR_HEIGHT = 48
 
 export function VoiceView(): React.JSX.Element {
   const sessionState = useVoiceStore((s) => s.sessionState)
+  const toolActive = useVoiceStore((s) => s.toolActive)
+  const toolActiveLabel = useVoiceStore((s) => s.toolActiveLabel)
   const accent = useActiveAgentAccent()
   const [viewIdx, setViewIdx] = useState(0)
 
@@ -53,7 +55,43 @@ export function VoiceView(): React.JSX.Element {
         <AgentSwitcher />
 
         <div style={{ position: 'relative' }}>
-          <ParticleSphere size={360} state={sessionState} color={sphereColor} pointCount={520} />
+          <div
+            style={{
+              animation: toolActive ? 'dalve-heartbeat 1.1s ease-in-out infinite' : 'none',
+              transformOrigin: 'center'
+            }}
+          >
+            <ParticleSphere size={360} state={sessionState} color={sphereColor} pointCount={520} />
+          </div>
+
+          {toolActive && (
+            <div
+              className="tracked-label"
+              style={{
+                position: 'absolute',
+                top: -28,
+                left: '50%',
+                transform: 'translateX(-50%)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                fontSize: 10,
+                color: '#6fe08a',
+                whiteSpace: 'nowrap'
+              }}
+            >
+              <span
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: '50%',
+                  background: '#6fe08a',
+                  animation: 'dalve-pulse 1.1s ease-in-out infinite'
+                }}
+              />
+              WORKING{toolActiveLabel ? ` · ${toolActiveLabel}` : ''}
+            </div>
+          )}
 
           <div
             style={{

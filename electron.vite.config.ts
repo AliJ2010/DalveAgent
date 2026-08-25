@@ -8,6 +8,14 @@ export default defineConfig({
       alias: {
         '@shared': resolve('src/shared')
       }
+    },
+    build: {
+      rollupOptions: {
+        // robotjs is a native addon (a .node binary loaded via require, not JS Rollup can
+        // analyze/bundle) — leave the require call as-is and let Node resolve it from
+        // node_modules at runtime instead.
+        external: ['robotjs']
+      }
     }
   },
   preload: {

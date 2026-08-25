@@ -243,7 +243,12 @@ function CanvasInner(): React.JSX.Element {
         maxZoom={2}
         onNodeContextMenu={(e, node) => {
           e.preventDefault()
-          if (node.id !== '__root__') archive(node.id)
+          if (node.id === '__root__') return
+          const agent = agents.find((a) => a.id === node.id)
+          const label = agent?.name ?? 'this agent'
+          if (window.confirm(`Archive ${label}? It'll disappear from the switcher, but you can restore it from the Archived list below.`)) {
+            archive(node.id)
+          }
         }}
         fitView
       >
