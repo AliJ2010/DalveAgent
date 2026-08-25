@@ -16,6 +16,7 @@ import * as autonomousTask from './autonomousTask'
 import * as appControl from './appControl'
 import * as uiAutomation from './uiAutomation'
 import * as ocr from './ocr'
+import * as gridTargeting from './gridTargeting'
 import * as journal from './journal'
 import type { AgentConfig, VoiceEvent } from '@shared/types'
 
@@ -44,7 +45,9 @@ The only hard limit: never type a password, payment card number, or other creden
 
 Screen sharing only ever watches the user's main/primary monitor — if something they mention isn't visible there, it may be on a different monitor you can't see; say so rather than guessing or clicking blind.
 
-click_element is your default click tool on both Windows and macOS for anything with a visible label — buttons, links, menu items, tabs, form fields, icon-only nav links included. It already tries accessibility data AND real OCR internally before giving up, so you don't need to chain tools yourself. Only reach for click_mouse/move_mouse from the video feed when click_element itself reports FAILED (meaning neither method found it — a real signal it's genuinely not there, not a cue to guess a coordinate instead) or for genuinely non-textual content with no label at all (a game, a drawing canvas, a map). Use find_elements or read_screen_text first whenever you want to confirm what's really on screen before acting. If click_element ever errors outright on macOS, the most likely cause is DALVE not yet having Accessibility permission granted in System Settings — say so plainly so the user can fix it, rather than silently downgrading to coordinates without explaining why.
+click_element is your default click tool on both Windows and macOS for anything with a visible label — buttons, links, menu items, tabs, form fields, icon-only nav links included. It already tries accessibility data AND real OCR internally before giving up, so you don't need to chain tools yourself. If click_element ever errors outright on macOS, the most likely cause is DALVE not yet having Accessibility permission granted in System Settings — say so plainly so the user can fix it, rather than silently downgrading to coordinates without explaining why.
+
+For grid/board content specifically — chess/checkers boards, sudoku, spreadsheets, calendars, minesweeper, anything laid out as uniform rows/columns — go straight to define_grid + click_grid_cell rather than trying click_element or click_text first. Confirmed via real testing: a chess board's squares and pieces are pure graphics with zero accessible name and zero readable text, so those tools will just fail there every time and waste a step. Call define_grid ONCE per game/session with your best visual estimate of the whole grid's outer boundary (a big, forgiving target), then click_grid_cell for every individual move after that — it computes the exact position mathematically instead of you re-guessing a small target from scratch each time. If a click still lands wrong, call define_grid again with a corrected boundary rather than continuing to guess with the same one. Genuinely non-textual, non-grid content with no label at all (a drawing canvas, a map, a free-form game) is the actual last resort for click_mouse/move_mouse.
 
 Clicking the wrong thing (e.g. the wrong contact in a chat list, the wrong item in a similar-looking row) is the single most common way you fail at this — the video feed is compressed and small text is easy to misread, so never click from a single glance when you're relying on pixel coordinates. Before a coordinate-based click where similar-looking rows could be confused, quickly move_mouse there first — that's free — and confirm in the next frame that the cursor actually landed on the right element before you click_mouse; skip this check when using click_element (it's already precise) or when the target is obvious and unambiguous. If a click turns out to have hit the wrong thing, say so immediately and correct it rather than continuing as if it worked. When a task spans multiple turns (e.g. "keep this conversation going without me"), re-check the screen state at the start of each new step rather than assuming it still matches what you last saw — things move, replies arrive, windows change focus.
 
@@ -249,6 +252,43 @@ const CLICK_TEXT_TOOL: FunctionDeclaration = {
   }
 }
 
+const DEFINE_GRID_TOOL: FunctionDeclaration = {
+  name: 'define_grid',
+  description:
+    "Registers the pixel boundary of a grid/board on screen (chess/checkers board, sudoku, spreadsheet, calendar, minesweeper — anything laid out as uniform rows/columns with no accessible labels and no readable text for click_element/click_text to find). Look at the video feed and estimate the FOUR OUTER EDGES of the whole grid as a single rectangle — that's a large, forgiving target, much easier to get right than guessing one small cell directly. After this, use click_grid_cell to click any individual cell by row/column with exact computed math instead of a fresh guess every time. Call this again any time the grid moves, resizes, or you get a cell wrong and want to recalibrate.",
+  parametersJsonSchema: {
+    type: 'object',
+    properties: {
+      label: { type: 'string', description: 'A short name for this grid, e.g. "chessboard". Reused in click_grid_cell.' },
+      x: { type: 'number', description: 'Left edge of the grid, pixels.' },
+      y: { type: 'number', description: 'Top edge of the grid, pixels.' },
+      width: { type: 'number', description: 'Total width of the grid, pixels.' },
+      height: { type: 'number', description: 'Total height of the grid, pixels.' },
+      rows: { type: 'number', description: 'Number of rows, e.g. 8 for a chess board.' },
+      cols: { type: 'number', description: 'Number of columns, e.g. 8 for a chess board.' }
+    },
+    required: ['label', 'x', 'y', 'width', 'height', 'rows', 'cols']
+  }
+}
+
+const CLICK_GRID_CELL_TOOL: FunctionDeclaration = {
+  name: 'click_grid_cell',
+  description:
+    "Clicks one exact cell of a previously-defined grid (see define_grid) — the position is computed mathematically from the grid's boundary, not guessed fresh. row/col are 0-indexed from the TOP-LEFT of the grid AS YOU CURRENTLY SEE IT on screen (if a chess board is flipped so Black is at the bottom, row 0 is still whatever's visually on top right now, not a fixed rank number — work out the mapping from what you actually see each time, since orientation can change).",
+  parametersJsonSchema: {
+    type: 'object',
+    properties: {
+      label: { type: 'string', description: 'The grid name used in define_grid.' },
+      row: { type: 'number', description: '0-indexed row, top = 0.' },
+      col: { type: 'number', description: '0-indexed column, left = 0.' },
+      button: { type: 'string', enum: ['left', 'right', 'middle'], description: 'Defaults to left.' },
+      double: { type: 'boolean', description: 'Double-click instead of a single click.' },
+      speed: SPEED_PARAM_SCHEMA
+    },
+    required: ['label', 'row', 'col']
+  }
+}
+
 const TRACE_PATTERN_TOOL: FunctionDeclaration = {
   name: 'trace_pattern',
   description:
@@ -411,6 +451,8 @@ async function buildToolsForAgent(agent: AgentConfig | null): Promise<Tool[]> {
     CLICK_ELEMENT_TOOL,
     READ_SCREEN_TEXT_TOOL,
     CLICK_TEXT_TOOL,
+    DEFINE_GRID_TOOL,
+    CLICK_GRID_CELL_TOOL,
     TRACE_PATTERN_TOOL,
     TYPE_TEXT_TOOL,
     PRESS_KEY_TOOL,
@@ -465,6 +507,10 @@ export async function startVoiceSession(
   if (!opts.isReconnect) {
     resumptionHandle = null
     reconnectAttempts = 0
+    // A grid defined for a previous conversation's board/spreadsheet/etc. has no business
+    // surviving into an unrelated new one — genuine reconnects (same conversation, dropped
+    // connection) should keep it, since the same grid is still on screen.
+    gridTargeting.clearGrids()
   }
 
   const apiKey = settingsStore.getGeminiApiKey()
@@ -856,6 +902,39 @@ async function handleToolCalls(functionCalls: FunctionCall[]): Promise<void> {
                 ocrCandidates: ocrResult.candidates ?? []
               }
             }
+          }
+        }
+      } else if (fc.name === 'define_grid') {
+        const label = String(args.label ?? '').trim()
+        if (!label) {
+          response = { error: 'No label given.' }
+        } else {
+          gridTargeting.defineGrid(label, {
+            x: Number(args.x),
+            y: Number(args.y),
+            width: Number(args.width),
+            height: Number(args.height),
+            rows: Math.max(1, Math.round(Number(args.rows))),
+            cols: Math.max(1, Math.round(Number(args.cols)))
+          })
+          response = { result: `Registered grid "${label}" — use click_grid_cell to click cells by row/col from now on.` }
+        }
+      } else if (fc.name === 'click_grid_cell') {
+        const label = String(args.label ?? '').trim()
+        const cell = gridTargeting.cellCenter(label, Math.round(Number(args.row)), Math.round(Number(args.col)))
+        if (!cell.found || cell.centerX === undefined || cell.centerY === undefined) {
+          response = { status: 'FAILED', error: cell.error ?? 'Cell not found.' }
+        } else {
+          await screenControl.clickMouse(
+            cell.centerX,
+            cell.centerY,
+            (args.button as 'left' | 'right' | 'middle') ?? 'left',
+            Boolean(args.double),
+            (args.speed as 'instant' | 'visible') ?? 'visible'
+          )
+          response = {
+            status: 'SUCCESS',
+            result: `Clicked row ${args.row}, col ${args.col} of "${label}". Remember: check the next frame to confirm this actually did what you expected before describing the outcome — a computed position still lands wrong if the grid boundary itself was defined slightly off.`
           }
         }
       } else if (fc.name === 'read_screen_text') {
