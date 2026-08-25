@@ -1,4 +1,7 @@
 import { createClient, type SupabaseClient, type RealtimeChannel } from '@supabase/supabase-js'
+import { app } from 'electron'
+import { join } from 'path'
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
 import { SUPABASE_URL, SUPABASE_ANON_KEY, isSupabaseConfigured } from '@shared/supabaseConfig'
 import { agentStore } from './agentStore'
 import { settingsStore } from './settingsStore'
@@ -13,12 +16,58 @@ export function isConfigured(): boolean {
   return isSupabaseConfigured()
 }
 
+function authSessionPath(): string {
+  return join(app.getPath('userData'), 'dalve-auth-session.json')
+}
+
+/** supabase-js persists the session via `localStorage` by default, which doesn't exist in an
+ *  Electron main process (there's no `window`) — without this it silently falls back to an
+ *  in-memory store, so the app forgot who was signed in on every single restart. This is the
+ *  "remember me" fix: a plain file next to the other local stores, read/written synchronously
+ *  since auth-js expects this API to behave synchronously-ish (it awaits, but never overlaps
+ *  calls in practice here — one Electron process, one client). */
+function readAuthFile(): Record<string, string> {
+  try {
+    const path = authSessionPath()
+    if (!existsSync(path)) return {}
+    return JSON.parse(readFileSync(path, 'utf-8'))
+  } catch {
+    return {}
+  }
+}
+
+function writeAuthFile(data: Record<string, string>): void {
+  const dir = app.getPath('userData')
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  writeFileSync(authSessionPath(), JSON.stringify(data), 'utf-8')
+}
+
+const fileSessionStorage = {
+  getItem: (key: string): string | null => readAuthFile()[key] ?? null,
+  setItem: (key: string, value: string): void => {
+    const data = readAuthFile()
+    data[key] = value
+    writeAuthFile(data)
+  },
+  removeItem: (key: string): void => {
+    const data = readAuthFile()
+    delete data[key]
+    writeAuthFile(data)
+  }
+}
+
 function getClient(): SupabaseClient {
   if (!client) {
     if (!isSupabaseConfigured()) {
       throw new Error('Cloud sync is not configured yet — add the Supabase project URL and anon key.')
     }
-    client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+    client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        storage: fileSessionStorage
+      }
+    })
   }
   return client
 }
