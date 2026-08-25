@@ -15,7 +15,8 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
  * Live API expects for `sendRealtimeInput`.
  */
 export async function startAudioCapture(
-  onChunk: (base64Pcm16: string) => void
+  onChunk: (base64Pcm16: string) => void,
+  onLevel?: (level: number) => void
 ): Promise<AudioCaptureHandle> {
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
@@ -37,11 +38,20 @@ export async function startAudioCapture(
   processor.onaudioprocess = (e) => {
     const input = e.inputBuffer.getChannelData(0)
     const pcm16 = new Int16Array(input.length)
+    let sumSquares = 0
     for (let i = 0; i < input.length; i++) {
       const s = Math.max(-1, Math.min(1, input[i]))
       pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff
+      sumSquares += s * s
     }
     onChunk(arrayBufferToBase64(pcm16.buffer))
+    if (onLevel) {
+      // RMS amplitude, scaled up since normal mic speech rarely approaches 1.0 — this is a
+      // visual cue, not a metering standard, so a punchier response reads better than a
+      // technically-correct but visually flat one.
+      const rms = Math.sqrt(sumSquares / input.length)
+      onLevel(Math.min(1, rms * 4))
+    }
   }
 
   source.connect(processor)

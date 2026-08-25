@@ -13,6 +13,9 @@ export class AudioPlayer {
   private ctx: AudioContext
   private nextStartTime = 0
   private activeSources: AudioBufferSourceNode[] = []
+  /** Set by the caller to receive a real-time 0-1 amplitude reading of what's actually playing —
+   *  drives a live visual pulse tied to Gemini's real speech, not a canned animation. */
+  onLevel?: (level: number) => void
 
   constructor() {
     this.ctx = new AudioContext({ sampleRate: 24000 })
@@ -23,7 +26,16 @@ export class AudioPlayer {
     const sampleCount = Math.floor(bytes.byteLength / 2)
     const pcm16 = new Int16Array(bytes.buffer, bytes.byteOffset, sampleCount)
     const float32 = new Float32Array(sampleCount)
-    for (let i = 0; i < sampleCount; i++) float32[i] = pcm16[i] / 0x8000
+    let sumSquares = 0
+    for (let i = 0; i < sampleCount; i++) {
+      const v = pcm16[i] / 0x8000
+      float32[i] = v
+      sumSquares += v * v
+    }
+    if (this.onLevel && sampleCount > 0) {
+      const rms = Math.sqrt(sumSquares / sampleCount)
+      this.onLevel(Math.min(1, rms * 3))
+    }
 
     const buffer = this.ctx.createBuffer(1, sampleCount, 24000)
     buffer.copyToChannel(float32, 0)
@@ -42,6 +54,7 @@ export class AudioPlayer {
   }
 
   clear(): void {
+    this.onLevel?.(0)
     for (const source of this.activeSources) {
       try {
         source.stop()

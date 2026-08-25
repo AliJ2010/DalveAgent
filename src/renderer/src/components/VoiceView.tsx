@@ -14,6 +14,7 @@ export function VoiceView(): React.JSX.Element {
   const sessionState = useVoiceStore((s) => s.sessionState)
   const toolActive = useVoiceStore((s) => s.toolActive)
   const toolActiveLabel = useVoiceStore((s) => s.toolActiveLabel)
+  const audioLevel = useVoiceStore((s) => s.audioLevel)
   const accent = useActiveAgentAccent()
   const [viewIdx, setViewIdx] = useState(0)
 
@@ -61,7 +62,13 @@ export function VoiceView(): React.JSX.Element {
               transformOrigin: 'center'
             }}
           >
-            <ParticleSphere size={360} state={sessionState} color={sphereColor} pointCount={520} />
+            <ParticleSphere
+              size={360}
+              state={sessionState}
+              color={sphereColor}
+              pointCount={520}
+              level={audioLevel}
+            />
           </div>
 
           {toolActive && (

@@ -15,9 +15,14 @@ interface VoiceStoreState {
    *  the listening/speaking state, for exactly the "is it slacking or actually doing it" question. */
   toolActive: boolean
   toolActiveLabel: string | null
+  /** Real-time 0-1 amplitude of whichever audio is actually flowing right now (mic input while
+   *  listening, Gemini's speech while speaking) — not a canned animation value. Drives the
+   *  sphere's live pulse so it visibly reacts to actual voice activity. */
+  audioLevel: number
   setSessionState: (s: VoiceSessionState) => void
   setActiveAgentId: (id: string | null) => void
   setToolActive: (active: boolean, label?: string | null) => void
+  setAudioLevel: (level: number) => void
   addEntry: (entry: Omit<TranscriptEntry, 'id' | 'timestamp'>) => string
   /** Appends a streaming transcript delta to the in-progress entry for that speaker,
    *  starting a new entry the first time it's called for the current turn. For 'dalve'
@@ -37,6 +42,7 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
   activeAgentId: null,
   toolActive: false,
   toolActiveLabel: null,
+  audioLevel: 0,
   transcript: [
     {
       id: entryId(),
@@ -49,6 +55,7 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
   setSessionState: (sessionState) => set({ sessionState }),
   setActiveAgentId: (activeAgentId) => set({ activeAgentId }),
   setToolActive: (toolActive, label = null) => set({ toolActive, toolActiveLabel: toolActive ? label : null }),
+  setAudioLevel: (audioLevel) => set({ audioLevel }),
 
   addEntry: (entry) => {
     const id = entryId()

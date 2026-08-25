@@ -30,6 +30,7 @@ export function initVoiceBridge(): void {
   if (bridgeInitialized) return
   bridgeInitialized = true
   player = new AudioPlayer()
+  player.onLevel = (level) => useVoiceStore.getState().setAudioLevel(level)
 
   window.dalve.voice.onEvent((event) => {
     const store = useVoiceStore.getState()
@@ -127,7 +128,10 @@ export async function startVoiceSession(agentId: string | null = null): Promise<
   try {
     await ensureSession(agentId)
     if (!captureHandle) {
-      captureHandle = await startAudioCapture((chunk) => window.dalve.voice.sendAudioChunk(chunk))
+      captureHandle = await startAudioCapture(
+        (chunk) => window.dalve.voice.sendAudioChunk(chunk),
+        (level) => useVoiceStore.getState().setAudioLevel(level)
+      )
     }
   } catch (err) {
     useVoiceStore.getState().setSessionState('error')
@@ -140,6 +144,7 @@ export async function stopVoiceSession(): Promise<void> {
   captureHandle = null
   await window.dalve.voice.stop()
   useVoiceStore.getState().setSessionState('idle')
+  useVoiceStore.getState().setAudioLevel(0)
 }
 
 export async function toggleVoiceSession(): Promise<void> {
