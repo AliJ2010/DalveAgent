@@ -42,7 +42,7 @@ The only hard limit: never type a password, payment card number, or other creden
 
 Screen sharing only ever watches the user's main/primary monitor — if something they mention isn't visible there, it may be on a different monitor you can't see; say so rather than guessing or clicking blind.
 
-You have a real targeting priority order on both Windows and macOS — always try them in this sequence, never skip straight to guessing pixel coordinates: (1) click_element — reads the real OS accessibility tree (Windows UI Automation / macOS Accessibility API) and clicks the actual live position of a named element, re-checked fresh at the moment of the click; this is correct for essentially anything with a visible label (buttons, links, menu items, tabs, form fields). (2) click_text — real OCR on the actual rendered pixels, for content with no accessible name (canvas UI, video/subtitle text, an image containing text). (3) click_mouse/move_mouse from the video feed — last resort only, for genuinely non-textual content (a game, a drawing canvas, a map). Use find_elements or read_screen_text first whenever you're not certain of an exact name/text — they cost nothing and tell you what's really there instead of you guessing. If click_element ever errors outright on macOS, the most likely cause is DALVE not yet having Accessibility permission granted in System Settings — say so plainly so the user can fix it, rather than silently downgrading to coordinates without explaining why.
+click_element is your default click tool on both Windows and macOS for anything with a visible label — buttons, links, menu items, tabs, form fields, icon-only nav links included. It already tries accessibility data AND real OCR internally before giving up, so you don't need to chain tools yourself. Only reach for click_mouse/move_mouse from the video feed when click_element itself reports FAILED (meaning neither method found it — a real signal it's genuinely not there, not a cue to guess a coordinate instead) or for genuinely non-textual content with no label at all (a game, a drawing canvas, a map). Use find_elements or read_screen_text first whenever you want to confirm what's really on screen before acting. If click_element ever errors outright on macOS, the most likely cause is DALVE not yet having Accessibility permission granted in System Settings — say so plainly so the user can fix it, rather than silently downgrading to coordinates without explaining why.
 
 Clicking the wrong thing (e.g. the wrong contact in a chat list, the wrong item in a similar-looking row) is the single most common way you fail at this — the video feed is compressed and small text is easy to misread, so never click from a single glance when you're relying on pixel coordinates. Before a coordinate-based click where similar-looking rows could be confused, quickly move_mouse there first — that's free — and confirm in the next frame that the cursor actually landed on the right element before you click_mouse; skip this check when using click_element (it's already precise) or when the target is obvious and unambiguous. If a click turns out to have hit the wrong thing, say so immediately and correct it rather than continuing as if it worked. When a task spans multiple turns (e.g. "keep this conversation going without me"), re-check the screen state at the start of each new step rather than assuming it still matches what you last saw — things move, replies arrive, windows change focus.
 
@@ -211,7 +211,7 @@ const FIND_ELEMENTS_TOOL: FunctionDeclaration = {
 const CLICK_ELEMENT_TOOL: FunctionDeclaration = {
   name: 'click_element',
   description:
-    "Clicks a UI element by its real accessibility name (e.g. \"Send\", \"Reply\", \"Address and search bar\") instead of a guessed pixel coordinate. This re-reads the OS accessibility tree fresh at the moment of the call and clicks the actual live position of the best-matching element — so it can't go stale between when you saw something and when you act on it, and it can't miss due to compressed/small video. STRONGLY PREFER this over click_mouse for anything with a visible label (buttons, links, menu items, tabs, text fields) — reserve click_mouse for canvas/custom-rendered content with no accessible name (games, drawing surfaces, custom video controls). If no good match is found, the response lists the real names actually present so you can retry correctly instead of guessing again.",
+    "Clicks something by its real name/label (e.g. \"Send\", \"Reply\", \"Play\") instead of a guessed pixel coordinate — THIS IS YOUR DEFAULT CLICK TOOL, use it for anything with a visible label. Internally it tries the OS accessibility tree first, and if that finds nothing (some real sites/apps have icon-only links with no accessible name at all — confirmed live on chess.com's own nav sidebar) it automatically falls back to real OCR on the actual pixels before giving up, so you only need to call this ONE tool rather than chaining find_elements/click_text/click_mouse yourself. Re-reads the screen fresh every call, so it can't click a stale position. Only reach for click_mouse if this tool itself reports FAILED — that response means neither method found it, which usually means it's genuinely not there, not that you should guess a coordinate for it anyway.",
   parametersJsonSchema: {
     type: 'object',
     properties: {
@@ -234,7 +234,7 @@ const READ_SCREEN_TEXT_TOOL: FunctionDeclaration = {
 const CLICK_TEXT_TOOL: FunctionDeclaration = {
   name: 'click_text',
   description:
-    "Clicks a piece of text found via real OCR on the current screen — for content with no accessible name that click_element can't find (canvas/custom-rendered UI, an image or video frame containing the text). Re-reads the screen fresh at the moment of the call, so it can't click a stale position. Priority order for anything on screen: try click_element first (fastest, most precise, works when the target has a real accessible name), then click_text (works on rendered pixels via OCR), and only fall back to click_mouse with coordinates you read off the video feed as a last resort.",
+    "Rarely needed directly — click_element already tries this automatically as its own fallback before failing. Only call click_text yourself when you specifically want to search rendered pixel text and skip the accessibility lookup (e.g. you already know it's video/subtitle content, not a real UI element).",
   parametersJsonSchema: {
     type: 'object',
     properties: {
@@ -812,29 +812,41 @@ async function handleToolCalls(functionCalls: FunctionCall[]): Promise<void> {
         }
       } else if (fc.name === 'click_element') {
         const targetName = String(args.name ?? '').trim()
-        if (!uiAutomation.isSupported()) {
-          response = { error: 'UI element clicking is not implemented on this platform — use click_mouse from the video feed instead.' }
-        } else if (!targetName) {
+        const button = (args.button as 'left' | 'right' | 'middle') ?? 'left'
+        const double = Boolean(args.double)
+        const speed = (args.speed as 'instant' | 'visible') ?? 'visible'
+        if (!targetName) {
           response = { error: 'No element name given.' }
         } else {
-          const located = await uiAutomation.locateElement(targetName)
-          if (!located.found || located.centerX === undefined || located.centerY === undefined) {
-            response = {
-              status: 'FAILED',
-              error: `No enabled, on-screen element matching "${targetName}" was found.`,
-              candidates: located.candidates ?? []
-            }
-          } else {
-            await screenControl.clickMouse(
-              located.centerX,
-              located.centerY,
-              (args.button as 'left' | 'right' | 'middle') ?? 'left',
-              Boolean(args.double),
-              (args.speed as 'instant' | 'visible') ?? 'visible'
-            )
+          // Chained internally rather than left for the model to sequence itself — found live
+          // (chess.com's sidebar nav) that icon-only links can have a real href/destination but
+          // literally no accessible name at all, so UI Automation correctly reports "not found"
+          // for something that's still genuinely clickable text on screen. Trusting the model to
+          // remember "try click_text next" as a separate step is exactly what failed in
+          // practice; doing the fallback here means there's only one way to get it wrong instead
+          // of two tool calls that both have to go right.
+          const uiResult = uiAutomation.isSupported() ? await uiAutomation.locateElement(targetName) : null
+          if (uiResult?.found && uiResult.centerX !== undefined && uiResult.centerY !== undefined) {
+            await screenControl.clickMouse(uiResult.centerX, uiResult.centerY, button, double, speed)
             response = {
               status: 'SUCCESS',
-              result: `Clicked "${located.element?.name}" (${located.element?.controlType}).`
+              result: `Clicked "${uiResult.element?.name}" (${uiResult.element?.controlType}), found via accessibility data.`
+            }
+          } else {
+            const ocrResult = await ocr.locateText(targetName)
+            if (ocrResult.found && ocrResult.centerX !== undefined && ocrResult.centerY !== undefined) {
+              await screenControl.clickMouse(ocrResult.centerX, ocrResult.centerY, button, double, speed)
+              response = {
+                status: 'SUCCESS',
+                result: `Clicked "${ocrResult.line?.text}", found via OCR (no accessible name existed for this element).`
+              }
+            } else {
+              response = {
+                status: 'FAILED',
+                error: `"${targetName}" wasn't found via accessibility data OR real OCR on the current screen. It genuinely isn't there right now, isn't visible, or is worded differently than you think — do NOT fall back to guessing a pixel coordinate for it. Either re-read the screen (find_elements/read_screen_text) and retry with a corrected name, or tell the user you can't find it.`,
+                accessibilityCandidates: uiResult?.candidates ?? [],
+                ocrCandidates: ocrResult.candidates ?? []
+              }
             }
           }
         }
