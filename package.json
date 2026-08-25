@@ -25,6 +25,7 @@
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
     "@google/genai": "^2.18.0",
+    "@supabase/supabase-js": "^2.112.4",
     "dagre": "^0.8.5",
     "lucide-react": "^1.33.0",
     "reactflow": "^11.11.4",

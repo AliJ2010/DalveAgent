@@ -64,9 +64,56 @@ function defaultCompanions(): AgentConfig[] {
 
 class AgentStore {
   private data: AgentConfig[]
+  private changeListener: (() => void) | null = null
+  /** True while applying a remote (cloud) update — suppresses re-pushing it right back to the
+   *  cloud, which would otherwise ping-pong forever between devices. */
+  private applyingRemote = false
 
   constructor() {
     this.data = this.load()
+  }
+
+  /** cloudSync registers this once signed in — called after every LOCAL mutation. */
+  setChangeListener(cb: (() => void) | null): void {
+    this.changeListener = cb
+  }
+
+  private notifyChange(): void {
+    if (!this.applyingRemote) this.changeListener?.()
+  }
+
+  /**
+   * Applies an agent as received from the cloud (last-write-wins by updatedAt) without
+   * re-triggering the change listener — this is how a change made on one device shows up on
+   * another without the two devices fighting over who's "right."
+   */
+  applyRemote(agent: AgentConfig): void {
+    this.applyingRemote = true
+    try {
+      const idx = this.data.findIndex((a) => a.id === agent.id)
+      if (idx < 0) {
+        this.data.push(agent)
+      } else if (agent.updatedAt >= this.data[idx].updatedAt) {
+        this.data[idx] = agent
+      } else {
+        return // local copy is newer, keep it — it'll get pushed back up on its own
+      }
+      this.persist()
+    } finally {
+      this.applyingRemote = false
+    }
+  }
+
+  /** Full replace — used once, right after sign-in, when the cloud already has this account's
+   *  agents and should be treated as authoritative over whatever was seeded locally. */
+  replaceAll(agents: AgentConfig[]): void {
+    this.applyingRemote = true
+    try {
+      this.data = agents
+      this.persist()
+    } finally {
+      this.applyingRemote = false
+    }
   }
 
   private load(): AgentConfig[] {
@@ -117,6 +164,7 @@ class AgentStore {
     }
     this.data.push(agent)
     this.persist()
+    this.notifyChange()
     return agent
   }
 
@@ -125,6 +173,7 @@ class AgentStore {
     if (idx < 0) return undefined
     this.data[idx] = { ...this.data[idx], ...patch, id: agentId, updatedAt: Date.now() }
     this.persist()
+    this.notifyChange()
     return this.data[idx]
   }
 

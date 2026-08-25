@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Trash2 } from 'lucide-react'
 import { useSettingsStore } from '../state/settingsStore'
 import { useUiStore } from '../state/uiStore'
+import { useAuthStore } from '../state/authStore'
 import { GEMINI_VOICES } from '@shared/types'
 
 export function SettingsScreen(): React.JSX.Element {
@@ -13,6 +14,9 @@ export function SettingsScreen(): React.JSX.Element {
   const addMcpServer = useSettingsStore((s) => s.addMcpServer)
   const removeMcpServer = useSettingsStore((s) => s.removeMcpServer)
   const setScreen = useUiStore((s) => s.setScreen)
+  const authEmail = useAuthStore((s) => s.email)
+  const authStatus = useAuthStore((s) => s.status)
+  const signOut = useAuthStore((s) => s.signOut)
 
   const [geminiInput, setGeminiInput] = useState('')
   const [composioInput, setComposioInput] = useState('')
@@ -81,6 +85,30 @@ export function SettingsScreen(): React.JSX.Element {
 
         {savedNotice && (
           <div style={{ fontSize: 12, color: '#6fe08a', marginTop: -20 }}>{savedNotice}</div>
+        )}
+
+        {authStatus === 'signedIn' && (
+          <Section title="Account">
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div>
+                <div style={{ fontSize: 13, color: 'var(--c-text-1)' }}>{authEmail}</div>
+                <div style={{ fontSize: 11, color: '#6fe08a', marginTop: 2 }}>Synced across devices</div>
+              </div>
+              <button
+                onClick={() => void signOut()}
+                className="tracked-label"
+                style={{
+                  fontSize: 10,
+                  padding: '6px 14px',
+                  borderRadius: 999,
+                  border: '1px solid var(--c-panel-border-strong)',
+                  color: 'var(--c-text-2)'
+                }}
+              >
+                Sign Out
+              </button>
+            </div>
+          </Section>
         )}
 
         <Section title="Gemini API key">

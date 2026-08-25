@@ -9,8 +9,10 @@ import { KnowledgeScreen } from './components/KnowledgeScreen'
 import { AgentsCanvas } from './components/AgentsCanvas'
 import { ScreenControlOverlay } from './components/ScreenControlOverlay'
 import { AutonomousTaskOverlay } from './components/AutonomousTaskOverlay'
+import { AuthScreen } from './components/AuthScreen'
 import { useUiStore } from './state/uiStore'
 import { useSettingsStore } from './state/settingsStore'
+import { useAuthStore } from './state/authStore'
 import {
   initVoiceBridge,
   initScreenControlBridge,
@@ -21,16 +23,22 @@ import {
 
 function App(): React.JSX.Element {
   const screen = useUiStore((s) => s.screen)
+  const authStatus = useAuthStore((s) => s.status)
 
   useEffect(() => {
+    void useAuthStore.getState().init()
+  }, [])
+
+  useEffect(() => {
+    // Only load real app state once we know whether we're signed in — settings/agents come from
+    // the cloud-synced stores once auth resolves, not before.
+    if (authStatus === 'loading') return
     initVoiceBridge()
     initScreenControlBridge()
     initAutonomousTaskBridge()
     initWakeTriggerBridge()
-    // Starts the always-on wake-word mic feed immediately at boot (not just when the Settings
-    // screen happens to be open) — the whole point is that it works while minimized to the tray.
     void useSettingsStore.getState().refresh()
-  }, [])
+  }, [authStatus])
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent): void {
@@ -44,6 +52,14 @@ function App(): React.JSX.Element {
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [screen])
+
+  if (authStatus === 'loading') {
+    return <div style={{ position: 'fixed', inset: 0, background: 'var(--c-void)' }} />
+  }
+
+  if (authStatus === 'signedOut') {
+    return <AuthScreen />
+  }
 
   return (
     <div style={{ display: 'flex', position: 'fixed', inset: 0, background: 'var(--c-void)' }}>

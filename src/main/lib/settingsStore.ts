@@ -43,11 +43,45 @@ function decrypt(encoded: string): string {
   return safeStorage.decryptString(Buffer.from(encoded, 'base64'))
 }
 
+/** The subset of settings that actually syncs to the cloud — deliberately excludes API keys
+ *  and MCP auth tokens, which stay device-local (see cloudSync.ts for why). */
+export interface SyncableSettings {
+  composioConnections: ComposioConnection[]
+  mcpServers: StoredSecrets['mcpServers']
+  dalveVoice: string
+  dalveMemory: string
+}
+
 class SettingsStore {
   private data: StoredSecrets
+  private changeListener: (() => void) | null = null
+  private applyingRemote = false
 
   constructor() {
     this.data = this.load()
+  }
+
+  /** cloudSync registers this once signed in — called after every LOCAL settings mutation. */
+  setChangeListener(cb: (() => void) | null): void {
+    this.changeListener = cb
+  }
+
+  private notifyChange(): void {
+    if (!this.applyingRemote) this.changeListener?.()
+  }
+
+  /** Applies settings received from the cloud without re-triggering a push back up. */
+  applyRemote(remote: SyncableSettings): void {
+    this.applyingRemote = true
+    try {
+      this.data.composioConnections = remote.composioConnections
+      this.data.mcpServers = remote.mcpServers
+      this.data.dalveVoice = remote.dalveVoice
+      this.data.dalveMemory = remote.dalveMemory
+      this.persist()
+    } finally {
+      this.applyingRemote = false
+    }
   }
 
   private load(): StoredSecrets {
@@ -81,6 +115,7 @@ class SettingsStore {
   setDalveVoice(voice: string): void {
     this.data.dalveVoice = voice
     this.persist()
+    this.notifyChange()
   }
 
   getDalveVoice(): string {
@@ -94,11 +129,13 @@ class SettingsStore {
   appendDalveMemory(fact: string): void {
     this.data.dalveMemory = this.data.dalveMemory ? `${this.data.dalveMemory}\n- ${fact}` : `- ${fact}`
     this.persist()
+    this.notifyChange()
   }
 
   setDalveMemory(memory: string): void {
     this.data.dalveMemory = memory
     this.persist()
+    this.notifyChange()
   }
 
   setGeminiApiKey(key: string): void {
@@ -144,6 +181,7 @@ class SettingsStore {
       })
     }
     this.persist()
+    this.notifyChange()
     return this.getState()
   }
 
@@ -159,12 +197,14 @@ class SettingsStore {
       tools: []
     })
     this.persist()
+    this.notifyChange()
     return this.getState()
   }
 
   removeMcpServer(id: string): SettingsState {
     this.data.mcpServers = this.data.mcpServers.filter((s) => s.id !== id)
     this.persist()
+    this.notifyChange()
     return this.getState()
   }
 

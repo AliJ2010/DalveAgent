@@ -6,6 +6,7 @@ import * as geminiLive from '../lib/geminiLive'
 import * as composio from '../lib/composio'
 import * as screenControl from '../lib/screenControl'
 import * as autonomousTask from '../lib/autonomousTask'
+import * as cloudSync from '../lib/cloudSync'
 import type { AgentConfig } from '@shared/types'
 
 export function registerIpcHandlers(): void {
@@ -191,4 +192,11 @@ export function registerIpcHandlers(): void {
     active: autonomousTask.isActive(),
     goal: autonomousTask.getGoal()
   }))
+
+  // --- Cloud account / sync ---
+  ipcMain.handle('cloud:isConfigured', () => cloudSync.isConfigured())
+  ipcMain.handle('cloud:getSession', () => cloudSync.getCurrentSession())
+  ipcMain.handle('cloud:signUp', (_e, email: string, password: string) => cloudSync.signUp(email, password))
+  ipcMain.handle('cloud:signIn', (_e, email: string, password: string) => cloudSync.signIn(email, password))
+  ipcMain.handle('cloud:signOut', () => cloudSync.signOut())
 }

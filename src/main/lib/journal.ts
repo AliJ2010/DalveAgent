@@ -2,7 +2,7 @@ import { app } from 'electron'
 import { join } from 'path'
 import { readFileSync, writeFileSync, existsSync } from 'fs'
 
-interface JournalDay {
+export interface JournalDay {
   date: string // YYYY-MM-DD
   lines: string[] // "[HH:MM] User: ..." / "[HH:MM] DALVE: ..."
 }
@@ -67,6 +67,33 @@ export function appendLine(speaker: 'user' | 'dalve', text: string, speakerLabel
   while (days.length > MAX_DAYS_KEPT) days.shift()
 
   persist(days)
+}
+
+export function getAllDays(): JournalDay[] {
+  return load()
+}
+
+export function replaceAllDays(days: JournalDay[]): void {
+  const sorted = [...days].sort((a, b) => a.date.localeCompare(b.date))
+  while (sorted.length > MAX_DAYS_KEPT) sorted.shift()
+  persist(sorted)
+}
+
+/**
+ * Merges local and cloud days line-by-line (deduped, sorted by the "[HH:MM]" prefix each line
+ * already carries) rather than picking one side wholesale — two devices could each have logged
+ * genuinely different conversations on the same day, and neither should silently disappear.
+ */
+export function mergeDays(local: JournalDay[], cloud: JournalDay[]): JournalDay[] {
+  const byDate = new Map<string, Set<string>>()
+  for (const d of [...local, ...cloud]) {
+    const set = byDate.get(d.date) ?? new Set<string>()
+    for (const line of d.lines) set.add(line)
+    byDate.set(d.date, set)
+  }
+  return Array.from(byDate.entries())
+    .map(([date, lines]) => ({ date, lines: Array.from(lines).sort() }))
+    .sort((a, b) => a.date.localeCompare(b.date))
 }
 
 /**

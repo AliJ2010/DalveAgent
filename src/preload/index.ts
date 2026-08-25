@@ -98,6 +98,15 @@ const dalveApi = {
       ipcRenderer.on('autonomousTask:event', listener)
       return () => ipcRenderer.removeListener('autonomousTask:event', listener)
     }
+  },
+  cloud: {
+    isConfigured: (): Promise<boolean> => ipcRenderer.invoke('cloud:isConfigured'),
+    getSession: (): Promise<{ signedIn: boolean; email?: string }> => ipcRenderer.invoke('cloud:getSession'),
+    signUp: (email: string, password: string): Promise<{ error?: string }> =>
+      ipcRenderer.invoke('cloud:signUp', email, password),
+    signIn: (email: string, password: string): Promise<{ error?: string }> =>
+      ipcRenderer.invoke('cloud:signIn', email, password),
+    signOut: (): Promise<void> => ipcRenderer.invoke('cloud:signOut')
   }
 }
 

@@ -1,4 +1,5 @@
 import { desktopCapturer, screen, type BrowserWindow } from 'electron'
+import { performance } from 'perf_hooks'
 import type { ScreenControlEvent } from '@shared/types'
 
 // robotjs is a native addon (rebuilt against Electron's ABI via `electron-builder install-app-deps`
@@ -136,20 +137,164 @@ function toGlobalCoords(x: number, y: number): { x: number; y: number } {
   }
 }
 
-// Instant jump, not an animated glide — moveMouseSmooth's visible drag-across-the-screen was
-// read as "slow." The final coordinate is identical either way; smooth vs instant only affects
-// how it looks while getting there, not accuracy.
-export function moveMouse(x: number, y: number): void {
-  const p = toGlobalCoords(x, y)
-  getRobot().moveMouse(p.x, p.y)
+// --- Mouse trajectory engine ---
+// robotjs's own moveMouseSmooth produced genuinely poor motion (reported as looking like
+// teleporting rather than travel, especially on curved paths) — it appears to internally step by
+// a fixed small delta per call with no real timing control. This replaces it with a hand-rolled
+// animator: one high-level command crosses into this module once, and the actual point-by-point
+// stepping happens in a local, real-time-driven loop (performance.now()-based, self-correcting
+// for timer drift/jitter) rather than a naive fixed-delay-per-step approach. The model only ever
+// asks for a target and a mode; it never generates individual coordinates.
+export type MoveMode = 'instant' | 'visible'
+
+const FRAME_MS = 12 // ~80fps ceiling — smooth without hammering the CPU or the input queue
+
+function easeInOutQuad(t: number): number {
+  return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2
 }
 
-export function clickMouse(x: number, y: number, button: 'left' | 'right' | 'middle' = 'left', double = false): void {
+/** Duration scales with distance so a 30px nudge and a full-screen traverse don't take the same time. */
+function durationForDistance(distancePx: number): number {
+  return Math.min(650, Math.max(90, distancePx * 0.55))
+}
+
+async function animateTo(toX: number, toY: number): Promise<void> {
+  const r = getRobot()
+  const from = r.getMousePos()
+  const distance = Math.hypot(toX - from.x, toY - from.y)
+  if (distance < 1) return
+  const durationMs = durationForDistance(distance)
+  const start = performance.now()
+
+  await new Promise<void>((resolve) => {
+    const tick = (): void => {
+      const elapsed = performance.now() - start
+      const t = Math.min(1, elapsed / durationMs)
+      const eased = easeInOutQuad(t)
+      r.moveMouse(Math.round(from.x + (toX - from.x) * eased), Math.round(from.y + (toY - from.y) * eased))
+      if (t < 1) setTimeout(tick, FRAME_MS)
+      else resolve()
+    }
+    tick()
+  })
+}
+
+/** Animates through a sequence of points as one continuous motion over totalDurationMs. */
+async function animatePath(points: { x: number; y: number }[], totalDurationMs: number): Promise<void> {
+  if (points.length === 0) return
+  const r = getRobot()
+  const perSegment = totalDurationMs / points.length
+  const start = performance.now()
+
+  for (let i = 0; i < points.length; i++) {
+    const segmentStart = start + i * perSegment
+    await new Promise<void>((resolve) => {
+      const tick = (): void => {
+        const elapsed = performance.now() - segmentStart
+        const t = Math.min(1, elapsed / perSegment)
+        r.moveMouse(Math.round(points[i].x), Math.round(points[i].y))
+        if (t < 1) setTimeout(tick, FRAME_MS)
+        else resolve()
+      }
+      tick()
+    })
+  }
+}
+
+export async function moveMouse(x: number, y: number, mode: MoveMode = 'visible'): Promise<void> {
+  const p = toGlobalCoords(x, y)
+  if (mode === 'instant') {
+    getRobot().moveMouse(p.x, p.y)
+  } else {
+    await animateTo(p.x, p.y)
+  }
+}
+
+export async function clickMouse(
+  x: number,
+  y: number,
+  button: 'left' | 'right' | 'middle' = 'left',
+  double = false,
+  mode: MoveMode = 'visible'
+): Promise<void> {
   requireControl()
   const p = toGlobalCoords(x, y)
   const r = getRobot()
-  r.moveMouse(p.x, p.y)
+  if (mode === 'instant') {
+    r.moveMouse(p.x, p.y)
+  } else {
+    await animateTo(p.x, p.y)
+  }
   r.mouseClick(button, double)
+}
+
+export type TracePattern = 'circle' | 'square' | 'zigzag' | 'line'
+
+/**
+ * Generates and smoothly animates a named shape locally — used both as a real "trace this path"
+ * capability and as a direct fix for the circle/square/zigzag test: the model names the shape and
+ * its size once, instead of computing and issuing dozens of individual move calls itself (which
+ * is inherently janky no matter how good the animator is, since each call round-trips through the
+ * tool-call/IPC layer separately).
+ */
+export async function tracePattern(
+  pattern: TracePattern,
+  centerX: number,
+  centerY: number,
+  size: number,
+  durationMs = 1200
+): Promise<void> {
+  const c = toGlobalCoords(centerX, centerY)
+  const half = size / 2
+  const points: { x: number; y: number }[] = []
+
+  if (pattern === 'circle') {
+    const steps = 72
+    for (let i = 0; i <= steps; i++) {
+      const angle = (i / steps) * Math.PI * 2
+      points.push({ x: c.x + Math.cos(angle) * half, y: c.y + Math.sin(angle) * half })
+    }
+  } else if (pattern === 'square') {
+    const corners = [
+      { x: c.x - half, y: c.y - half },
+      { x: c.x + half, y: c.y - half },
+      { x: c.x + half, y: c.y + half },
+      { x: c.x - half, y: c.y + half },
+      { x: c.x - half, y: c.y - half }
+    ]
+    const stepsPerSide = 18
+    for (let i = 0; i < corners.length - 1; i++) {
+      for (let s = 0; s < stepsPerSide; s++) {
+        const t = s / stepsPerSide
+        points.push({
+          x: corners[i].x + (corners[i + 1].x - corners[i].x) * t,
+          y: corners[i].y + (corners[i + 1].y - corners[i].y) * t
+        })
+      }
+    }
+  } else if (pattern === 'zigzag') {
+    const segments = 6
+    const stepsPerSegment = 12
+    for (let i = 0; i < segments; i++) {
+      const x0 = c.x - half + (size / segments) * i
+      const x1 = c.x - half + (size / segments) * (i + 1)
+      const y0 = i % 2 === 0 ? c.y - half : c.y + half
+      const y1 = i % 2 === 0 ? c.y + half : c.y - half
+      for (let s = 0; s < stepsPerSegment; s++) {
+        const t = s / stepsPerSegment
+        points.push({ x: x0 + (x1 - x0) * t, y: y0 + (y1 - y0) * t })
+      }
+    }
+  } else {
+    // line: straight across through the center, `size` long
+    const steps = 40
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps
+      points.push({ x: c.x - half + size * t, y: c.y })
+    }
+  }
+
+  await animatePath(points, durationMs)
 }
 
 export function typeText(text: string): void {

@@ -13,6 +13,7 @@ import { agentStore } from './agentStore'
 import * as composio from './composio'
 import * as screenControl from './screenControl'
 import * as autonomousTask from './autonomousTask'
+import * as appControl from './appControl'
 import * as journal from './journal'
 import type { AgentConfig, VoiceEvent } from '@shared/types'
 
@@ -30,6 +31,8 @@ When given a task, get straight to doing it. NEVER repeat, paraphrase, or summar
 You are expected to be genuinely autonomous once given a goal: figure things out, try things, adapt when something doesn't work, and keep making forward progress without checking in after every little step. If your first approach doesn't pan out (a link doesn't work, a page looks different than expected), think of another way to get there yourself — search differently, try a different site, look at another monitor — rather than reporting the obstacle back to the user and waiting. Only come back to the user when you're truly stuck after multiple genuine attempts, need information only they have, or the task is done.
 
 You can also see and physically control the user's computer, like a partner sitting at the keyboard with them. Call start_screen_share to begin watching their screen as a live video feed (roughly one frame per second) — after that you simply see the screen, no separate "look" tool needed. Once sharing is on, you have full standing authorization to move the mouse, click, type, press keys, and scroll — just do it, no permission tool to call first.
+
+Opening or switching to an application is a DETERMINISTIC action — never do it by visually hunting through Spotlight, the Start Menu, or the Dock with screen control. Call open_application (or activate_application if it's already running) instead; only fall back to visual screen control if that tool itself reports it failed. Same for fullscreen_window after the app is frontmost. These tools tell you their real status — SUCCESS, FAILED, or UNCERTAIN — and UNCERTAIN means exactly that: don't round it up to success. If a tool reports UNCERTAIN or FAILED, say so honestly and either retry or tell the user what actually happened; never tell them something completed when the tool told you it didn't or couldn't confirm it.
 
 CRITICAL RULE, no exceptions: describing a physical action and performing it are two different things, and only the tool call actually does anything — saying words never moves the mouse or types a single character. Never say "clicking now," "moving to his chat," "typing that in," or anything similar UNLESS you are calling click_mouse/move_mouse/type_text/press_key in that exact same turn. If you haven't made the tool call yet, don't describe having done it — narrate AFTER the call resolves, or not at all, never instead of it. Silently claiming an action while doing nothing is the single worst failure mode here — worse than saying nothing, worse than asking a question — because the user has no way to tell the difference between real progress and an empty sentence until they check the screen themselves.
 
@@ -56,6 +59,38 @@ const OPEN_URL_TOOL: FunctionDeclaration = {
     },
     required: ['url']
   }
+}
+
+const OPEN_APPLICATION_TOOL: FunctionDeclaration = {
+  name: 'open_application',
+  description:
+    'Opens a native application by name using the OS\'s own launch mechanism (macOS: `open -a`, Windows: Start-Process) — actually verifies the app became frontmost before reporting success. ALWAYS use this to open an app instead of visually hunting through Spotlight/Start Menu with screen control; only fall back to screen control if this tool fails.',
+  parametersJsonSchema: {
+    type: 'object',
+    properties: {
+      name: { type: 'string', description: 'The application name, e.g. "Terminal", "Calculator", "Notepad".' }
+    },
+    required: ['name']
+  }
+}
+
+const ACTIVATE_APPLICATION_TOOL: FunctionDeclaration = {
+  name: 'activate_application',
+  description: 'Brings an already-running application to the front by name. Verifies it actually became frontmost.',
+  parametersJsonSchema: {
+    type: 'object',
+    properties: {
+      name: { type: 'string', description: 'The application name.' }
+    },
+    required: ['name']
+  }
+}
+
+const FULLSCREEN_WINDOW_TOOL: FunctionDeclaration = {
+  name: 'fullscreen_window',
+  description:
+    "Toggles native fullscreen/maximize on the CURRENT frontmost window. Call this after open_application/activate_application, not as a way to guess which window to target.",
+  parametersJsonSchema: { type: 'object', properties: {} }
 }
 
 const CREATE_AGENT_TOOL: FunctionDeclaration = {
@@ -126,6 +161,12 @@ const STOP_SCREEN_SHARE_TOOL: FunctionDeclaration = {
   parametersJsonSchema: { type: 'object', properties: {} }
 }
 
+const SPEED_PARAM_SCHEMA = {
+  type: 'string',
+  enum: ['instant', 'visible'],
+  description: 'Defaults to "visible" — a real, smoothly-animated glide you can actually watch travel, timed by distance. Use "instant" only when the visible motion itself doesn\'t matter.'
+} as const
+
 const MOVE_MOUSE_TOOL: FunctionDeclaration = {
   name: 'move_mouse',
   description: "Moves the mouse cursor to a pixel position on the user's screen, based on what you see in the shared video feed.",
@@ -133,7 +174,8 @@ const MOVE_MOUSE_TOOL: FunctionDeclaration = {
     type: 'object',
     properties: {
       x: { type: 'number', description: 'X pixel coordinate, left edge of the screen is 0.' },
-      y: { type: 'number', description: 'Y pixel coordinate, top edge of the screen is 0.' }
+      y: { type: 'number', description: 'Y pixel coordinate, top edge of the screen is 0.' },
+      speed: SPEED_PARAM_SCHEMA
     },
     required: ['x', 'y']
   }
@@ -148,9 +190,27 @@ const CLICK_MOUSE_TOOL: FunctionDeclaration = {
       x: { type: 'number', description: 'X pixel coordinate.' },
       y: { type: 'number', description: 'Y pixel coordinate.' },
       button: { type: 'string', enum: ['left', 'right', 'middle'], description: 'Defaults to left.' },
-      double: { type: 'boolean', description: 'Double-click instead of a single click.' }
+      double: { type: 'boolean', description: 'Double-click instead of a single click.' },
+      speed: SPEED_PARAM_SCHEMA
     },
     required: ['x', 'y']
+  }
+}
+
+const TRACE_PATTERN_TOOL: FunctionDeclaration = {
+  name: 'trace_pattern',
+  description:
+    'Smoothly moves the cursor through a named shape (circle, square, zigzag, or a straight line) centered on a point, as ONE continuous animated motion — generated and timed locally, not by you computing individual points. Use this instead of calling move_mouse repeatedly in a loop to trace a path; that always looks janky no matter how good each individual move is.',
+  parametersJsonSchema: {
+    type: 'object',
+    properties: {
+      pattern: { type: 'string', enum: ['circle', 'square', 'zigzag', 'line'] },
+      x: { type: 'number', description: 'Center X pixel coordinate.' },
+      y: { type: 'number', description: 'Center Y pixel coordinate.' },
+      size: { type: 'number', description: 'Diameter/side length/total length in pixels. Defaults to 120.' },
+      durationMs: { type: 'number', description: 'Total time for the whole motion, in milliseconds. Defaults to 1200.' }
+    },
+    required: ['pattern', 'x', 'y']
   }
 }
 
@@ -222,6 +282,16 @@ let sessionEpoch = 0
 /** Set by the switch_agent tool; the actual switch happens once the current turn finishes speaking. */
 let pendingSwitchAgentId: string | null | undefined
 
+// Session resumption (codes 1006/1008 fix): Gemini Live sessions have a maximum duration and
+// send a GoAway warning before force-closing with 1008 ("client failed to close after GoAway"),
+// or can drop for transient network reasons (1006). The server periodically hands out a
+// resumption handle via sessionResumptionUpdate; reconnecting WITH that handle (transparent
+// mode) restores the model's turn state instead of starting a blank session. Reset only when
+// the user explicitly starts a genuinely new conversation, not on every reconnect.
+let resumptionHandle: string | null = null
+let reconnectAttempts = 0
+const MAX_RECONNECT_ATTEMPTS = 3
+
 // Transcripts arrive from Gemini as incremental deltas, accumulated turn-by-turn in the renderer
 // (voiceStore) for display — these mirror that same accumulation on the main-process side purely
 // so a COMPLETE turn can be written to the durable journal once, rather than persisting every
@@ -275,6 +345,9 @@ function agentRegistrySnapshot(): string {
 async function buildToolsForAgent(agent: AgentConfig | null): Promise<Tool[]> {
   const functionDeclarations: FunctionDeclaration[] = [
     OPEN_URL_TOOL,
+    OPEN_APPLICATION_TOOL,
+    ACTIVATE_APPLICATION_TOOL,
+    FULLSCREEN_WINDOW_TOOL,
     LIST_AGENTS_TOOL,
     SWITCH_AGENT_TOOL,
     REMEMBER_FACT_TOOL,
@@ -282,6 +355,7 @@ async function buildToolsForAgent(agent: AgentConfig | null): Promise<Tool[]> {
     STOP_SCREEN_SHARE_TOOL,
     MOVE_MOUSE_TOOL,
     CLICK_MOUSE_TOOL,
+    TRACE_PATTERN_TOOL,
     TYPE_TEXT_TOOL,
     PRESS_KEY_TOOL,
     SCROLL_TOOL,
@@ -290,12 +364,19 @@ async function buildToolsForAgent(agent: AgentConfig | null): Promise<Tool[]> {
   ]
   if (!agent) functionDeclarations.push(CREATE_AGENT_TOOL)
 
-  const appKeys = agent
-    ? agent.toolScope.filter((s) => s.startsWith('composio:')).map((s) => s.slice('composio:'.length))
-    : settingsStore
-        .getState()
-        .composioConnections.filter((c) => c.connected)
-        .map((c) => c.appKey)
+  // Agents are teammates by default — a sub-agent with no explicit toolScope gets the same
+  // connected apps DALVE has (including Discord), not none. toolScope only becomes a real
+  // restriction once it's explicitly set with composio: entries, which locks that agent down
+  // to just those apps. This was the actual cause of "only DALVE can send Discord messages" —
+  // every new agent silently got zero app access with no way to grant any.
+  const agentComposioScope = agent?.toolScope.filter((s) => s.startsWith('composio:')) ?? []
+  const appKeys =
+    agent && agentComposioScope.length > 0
+      ? agentComposioScope.map((s) => s.slice('composio:'.length))
+      : settingsStore
+          .getState()
+          .composioConnections.filter((c) => c.connected)
+          .map((c) => c.appKey)
 
   if (appKeys.length > 0) {
     try {
@@ -315,8 +396,20 @@ async function buildToolsForAgent(agent: AgentConfig | null): Promise<Tool[]> {
  * the old session is closed and a new one opened. Callbacks are epoch-guarded so a stale
  * close/error from a superseded session can't clobber the new one's state.
  */
-export async function startVoiceSession(agentId: string | null = null): Promise<void> {
+export async function startVoiceSession(
+  agentId: string | null = null,
+  opts: { isReconnect?: boolean } = {}
+): Promise<void> {
   if (session && activeAgentId === agentId) return
+
+  // A resumption handle is tied to one specific conversation's context — only the internal
+  // auto-reconnect path (same agent, right after an unexpected close) should reuse it. Any
+  // other call — the user manually starting a session, switching agents, whatever — means a
+  // fresh conversation, so a stale handle from something else must not leak into it.
+  if (!opts.isReconnect) {
+    resumptionHandle = null
+    reconnectAttempts = 0
+  }
 
   const apiKey = settingsStore.getGeminiApiKey()
   if (!apiKey) {
@@ -352,7 +445,7 @@ export async function startVoiceSession(agentId: string | null = null): Promise<
   // per-agent scratchpad, which agent.memory already covers separately.
   const journalContext = !agent ? journal.getRecentContext() : ''
   const journalNote = journalContext
-    ? `\n\nFull transcript of recent conversations (most recent last), so you have real continuity across sessions — reference it naturally when relevant, don't recite it:\n${journalContext}`
+    ? `\n\nFull transcript of everyone's recent conversations — yours AND every other agent's, each line labeled with who said it (User, DALVE, or another agent by name) — most recent last. This is how you stay aware as team lead: if the user asks what another agent has been up to, or references something they told a different agent, check here before saying you don't know. Reference it naturally, don't recite it:\n${journalContext}`
     : ''
   const registryNote = `\n\nAgents currently registered:\n${agentRegistrySnapshot()}`
   const systemPrompt =
@@ -378,11 +471,15 @@ export async function startVoiceSession(agentId: string | null = null): Promise<
         },
         inputAudioTranscription: {},
         outputAudioTranscription: {},
-        tools: await buildToolsForAgent(agent)
+        tools: await buildToolsForAgent(agent),
+        // Reconnecting with the last handle restores the model's turn state instead of starting
+        // blank — see onclose below for the actual reconnect trigger.
+        sessionResumption: { handle: resumptionHandle ?? undefined, transparent: true }
       },
       callbacks: {
         onopen: () => {
           if (myEpoch !== sessionEpoch) return
+          reconnectAttempts = 0
           if (agent) agentStore.setStatus(agent.id, 'active')
           emit({ type: 'state', state: 'listening' })
         },
@@ -406,13 +503,38 @@ export async function startVoiceSession(agentId: string | null = null): Promise<
           console.error('[geminiLive] onclose:', { code: e?.code, reason: e?.reason, wasClean: e?.wasClean })
           resetAgentStatus()
           flushJournalBuffers(agent?.name ?? 'DALVE')
-          screenControl.stopAll()
           session = null
           activeAgentId = null
+
+          // 1000 = normal close (user hung up). Anything else — including 1008 ("client failed
+          // to close after GoAway", i.e. hit the session's max duration) and 1006 (abnormal/
+          // network drop) — is recoverable: reconnect using the resumption handle instead of
+          // just erroring out and dropping the user's conversation. Capped so a genuinely broken
+          // connection (bad key, no network) doesn't retry forever.
+          const recoverable = e && e.code !== 1000 && reconnectAttempts < MAX_RECONNECT_ATTEMPTS
+          if (recoverable) {
+            reconnectAttempts++
+            emit({ type: 'state', state: 'connecting' })
+            console.log(`[geminiLive] reconnecting after unexpected close (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`)
+            setTimeout(() => {
+              if (myEpoch !== sessionEpoch) return // superseded by something else in the meantime
+              startVoiceSession(agentId, { isReconnect: true }).catch((err) => {
+                console.error('[geminiLive] reconnect attempt failed:', err)
+                screenControl.stopAll()
+                emit({ type: 'error', message: 'Lost the voice connection and could not reconnect.' })
+                emit({ type: 'state', state: 'idle' })
+              })
+            }, 600)
+            return
+          }
+
+          screenControl.stopAll()
+          reconnectAttempts = 0
+          resumptionHandle = null // give up on this resumption chain, a fresh one will be issued next time
           if (e && e.code !== 1000) {
             emit({
               type: 'error',
-              message: `Voice session closed unexpectedly (code ${e.code}${e.reason ? `: ${e.reason}` : ''}).`
+              message: `Voice session closed unexpectedly (code ${e.code}${e.reason ? `: ${e.reason}` : ''}) and reconnecting didn't work.`
             })
           }
           emit({ type: 'state', state: 'idle' })
@@ -441,6 +563,19 @@ function handleMessage(message: LiveServerMessage): void {
     console.log('[geminiLive] toolCall received:', message.toolCall.functionCalls.map((f) => f.name))
     toolCalledThisTurn = true
     void handleToolCalls(message.toolCall.functionCalls)
+  }
+
+  // The server hands out a fresh resumption handle periodically — capturing it is what makes
+  // the onclose reconnect actually restore context instead of starting blank.
+  if (message.sessionResumptionUpdate?.newHandle) {
+    resumptionHandle = message.sessionResumptionUpdate.newHandle
+  }
+
+  // A heads-up that the connection will be force-closed soon (approaching max session duration).
+  // No action needed here beyond visibility — the onclose handler's reconnect-with-resumption-
+  // handle logic is what actually keeps the conversation going once the close happens.
+  if (message.goAway) {
+    console.log('[geminiLive] received GoAway, time left:', message.goAway.timeLeft)
   }
 
   const content = message.serverContent
@@ -531,6 +666,15 @@ async function handleToolCalls(functionCalls: FunctionCall[]): Promise<void> {
         const url = String(args.url ?? '')
         await shell.openExternal(url)
         response = { result: `Opened ${url}` }
+      } else if (fc.name === 'open_application') {
+        const { result, message } = await appControl.openApplication(String(args.name ?? ''))
+        response = { status: result, result: message }
+      } else if (fc.name === 'activate_application') {
+        const { result, message } = await appControl.activateApplication(String(args.name ?? ''))
+        response = { status: result, result: message }
+      } else if (fc.name === 'fullscreen_window') {
+        const { result, message } = await appControl.fullscreenFrontmostWindow()
+        response = { status: result, result: message }
       } else if (fc.name === 'create_agent') {
         const type = args.type === 'bot' ? 'bot' : 'companion'
         const agent = agentStore.create({
@@ -583,16 +727,30 @@ async function handleToolCalls(functionCalls: FunctionCall[]): Promise<void> {
         screenControl.stopAll()
         response = { result: 'Stopped watching the screen and released control.' }
       } else if (fc.name === 'move_mouse') {
-        screenControl.moveMouse(Number(args.x), Number(args.y))
+        await screenControl.moveMouse(
+          Number(args.x),
+          Number(args.y),
+          (args.speed as 'instant' | 'visible') ?? 'visible'
+        )
         response = { result: 'Moved.' }
       } else if (fc.name === 'click_mouse') {
-        screenControl.clickMouse(
+        await screenControl.clickMouse(
           Number(args.x),
           Number(args.y),
           (args.button as 'left' | 'right' | 'middle') ?? 'left',
-          Boolean(args.double)
+          Boolean(args.double),
+          (args.speed as 'instant' | 'visible') ?? 'visible'
         )
         response = { result: 'Clicked.' }
+      } else if (fc.name === 'trace_pattern') {
+        await screenControl.tracePattern(
+          (args.pattern as screenControl.TracePattern) ?? 'circle',
+          Number(args.x),
+          Number(args.y),
+          Number(args.size) || 120,
+          Number(args.durationMs) || 1200
+        )
+        response = { result: `Traced a ${String(args.pattern ?? 'circle')}.` }
       } else if (fc.name === 'type_text') {
         screenControl.typeText(String(args.text ?? ''))
         response = { result: 'Typed.' }
@@ -642,6 +800,8 @@ export function sendText(text: string): void {
 
 export function stopVoiceSession(): void {
   sessionEpoch++ // invalidate any in-flight connect/callbacks
+  reconnectAttempts = 0
+  resumptionHandle = null // deliberate stop — don't resume this conversation on the next start
   screenControl.stopAll()
   if (!session) return
   const closingAgent = activeAgentId ? agentStore.get(activeAgentId) : null

@@ -145,7 +145,7 @@ async function tick(goal: string): Promise<void> {
   }
 
   if (decision.action === 'click' && typeof decision.x === 'number' && typeof decision.y === 'number') {
-    screenControl.clickMouse(decision.x, decision.y)
+    await screenControl.clickMouse(decision.x, decision.y)
   } else if (decision.action === 'type' && decision.text) {
     screenControl.typeText(decision.text)
   } else if (decision.action === 'key' && decision.key) {
