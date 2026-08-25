@@ -285,9 +285,9 @@ let pendingSwitchAgentId: string | null | undefined
 // Session resumption (codes 1006/1008 fix): Gemini Live sessions have a maximum duration and
 // send a GoAway warning before force-closing with 1008 ("client failed to close after GoAway"),
 // or can drop for transient network reasons (1006). The server periodically hands out a
-// resumption handle via sessionResumptionUpdate; reconnecting WITH that handle (transparent
-// mode) restores the model's turn state instead of starting a blank session. Reset only when
-// the user explicitly starts a genuinely new conversation, not on every reconnect.
+// resumption handle via sessionResumptionUpdate; reconnecting WITH that handle restores the
+// model's turn state instead of starting a blank session. Reset only when the user explicitly
+// starts a genuinely new conversation, not on every reconnect.
 let resumptionHandle: string | null = null
 let reconnectAttempts = 0
 const MAX_RECONNECT_ATTEMPTS = 3
@@ -473,8 +473,10 @@ export async function startVoiceSession(
         outputAudioTranscription: {},
         tools: await buildToolsForAgent(agent),
         // Reconnecting with the last handle restores the model's turn state instead of starting
-        // blank — see onclose below for the actual reconnect trigger.
-        sessionResumption: { handle: resumptionHandle ?? undefined, transparent: true }
+        // blank — see onclose below for the actual reconnect trigger. `transparent` is a
+        // Vertex/Enterprise-only option (confirmed live: it hard-errors "not supported in Gemini
+        // Developer API mode", which is what a plain API key uses) — omitted here.
+        sessionResumption: { handle: resumptionHandle ?? undefined }
       },
       callbacks: {
         onopen: () => {

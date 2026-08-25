@@ -6,6 +6,8 @@ import { registerIpcHandlers } from './ipc/handlers'
 import { attachWindow, stopVoiceSession } from './lib/geminiLive'
 import { attachWindow as attachScreenControlWindow, stopAll as stopScreenControl } from './lib/screenControl'
 import { attachWindow as attachAutonomousTaskWindow, stopAutonomousTask } from './lib/autonomousTask'
+import { attachWindow as attachAgentStoreWindow } from './lib/agentStore'
+import { attachWindow as attachSettingsStoreWindow } from './lib/settingsStore'
 
 // Belt-and-suspenders alongside the lazy singletons in settingsStore/agentStore: pin the app
 // name explicitly so userData resolves to the same %APPDATA%\dalve folder in dev and packaged
@@ -131,6 +133,8 @@ function createWindow(): void {
   attachWindow(mainWindow)
   attachScreenControlWindow(mainWindow)
   attachAutonomousTaskWindow(mainWindow)
+  attachAgentStoreWindow(mainWindow)
+  attachSettingsStoreWindow(mainWindow)
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)

@@ -159,6 +159,8 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('agents:restore', (_e, id: string) => agentStore.setArchived(id, false))
 
+  ipcMain.handle('agents:remove', (_e, id: string) => agentStore.remove(id))
+
   // --- Voice (Gemini Live) ---
   ipcMain.handle('voice:start', async (_e, agentId?: string | null) => {
     try {

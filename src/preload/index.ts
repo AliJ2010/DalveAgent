@@ -43,7 +43,14 @@ const dalveApi = {
       authToken?: string
     }): Promise<SettingsState> => ipcRenderer.invoke('settings:addMcpServer', server),
     removeMcpServer: (id: string): Promise<SettingsState> =>
-      ipcRenderer.invoke('settings:removeMcpServer', id)
+      ipcRenderer.invoke('settings:removeMcpServer', id),
+    /** Fires whenever settings change for ANY reason, including a remote update arriving via
+     *  cloud sync from another device — that's what makes cross-device sync show up live. */
+    onChanged: (callback: () => void): (() => void) => {
+      const listener = (): void => callback()
+      ipcRenderer.on('settings:changed', listener)
+      return () => ipcRenderer.removeListener('settings:changed', listener)
+    }
   },
   agents: {
     list: (): Promise<AgentConfig[]> => ipcRenderer.invoke('agents:list'),
@@ -54,7 +61,16 @@ const dalveApi = {
     update: (id: string, patch: Partial<AgentConfig>): Promise<AgentConfig> =>
       ipcRenderer.invoke('agents:update', id, patch),
     archive: (id: string): Promise<AgentConfig> => ipcRenderer.invoke('agents:archive', id),
-    restore: (id: string): Promise<AgentConfig> => ipcRenderer.invoke('agents:restore', id)
+    restore: (id: string): Promise<AgentConfig> => ipcRenderer.invoke('agents:restore', id),
+    /** Permanent delete — unlike archive/restore this cannot be undone. */
+    remove: (id: string): Promise<boolean> => ipcRenderer.invoke('agents:remove', id),
+    /** Fires whenever agents change for ANY reason, including a remote update arriving via
+     *  cloud sync from another device. */
+    onChanged: (callback: () => void): (() => void) => {
+      const listener = (): void => callback()
+      ipcRenderer.on('agents:changed', listener)
+      return () => ipcRenderer.removeListener('agents:changed', listener)
+    }
   },
   voice: {
     start: (agentId?: string | null): Promise<void> => ipcRenderer.invoke('voice:start', agentId),

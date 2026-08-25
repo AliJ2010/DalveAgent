@@ -1,8 +1,13 @@
-import { app, safeStorage } from 'electron'
+import { app, safeStorage, type BrowserWindow } from 'electron'
 import { join } from 'path'
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
 import type { ComposioConnection, McpServerConfig, SettingsState } from '@shared/types'
 import { PRIORITY_COMPOSIO_APPS } from '@shared/types'
+
+let win: BrowserWindow | null = null
+export function attachWindow(window: BrowserWindow): void {
+  win = window
+}
 
 interface StoredSecrets {
   geminiApiKey?: string // base64-encoded, safeStorage-encrypted
@@ -43,13 +48,17 @@ function decrypt(encoded: string): string {
   return safeStorage.decryptString(Buffer.from(encoded, 'base64'))
 }
 
-/** The subset of settings that actually syncs to the cloud — deliberately excludes API keys
- *  and MCP auth tokens, which stay device-local (see cloudSync.ts for why). */
+/** The subset of settings that syncs to the cloud. geminiApiKey/composioApiKey travel as
+ *  plaintext here (the wire/cloud-row format) even though they're kept safeStorage-encrypted
+ *  on disk locally — see cloudSync.ts for how that round-trip works. MCP auth tokens still stay
+ *  device-local (per-server, less commonly needed on every machine, not asked for). */
 export interface SyncableSettings {
   composioConnections: ComposioConnection[]
   mcpServers: StoredSecrets['mcpServers']
   dalveVoice: string
   dalveMemory: string
+  geminiApiKey?: string
+  composioApiKey?: string
 }
 
 class SettingsStore {
@@ -68,9 +77,18 @@ class SettingsStore {
 
   private notifyChange(): void {
     if (!this.applyingRemote) this.changeListener?.()
+    this.notifyRenderer()
   }
 
-  /** Applies settings received from the cloud without re-triggering a push back up. */
+  /** Always fires, including for remote-applied changes — so a settings change made on another
+   *  device shows up on screen without needing to sign out and back in. */
+  private notifyRenderer(): void {
+    win?.webContents.send('settings:changed')
+  }
+
+  /** Applies settings received from the cloud without re-triggering a push back up. Only
+   *  overwrites an API key locally if the remote actually has one — never wipes a key this
+   *  device already has just because the cloud row hasn't caught up yet. */
   applyRemote(remote: SyncableSettings): void {
     this.applyingRemote = true
     try {
@@ -78,7 +96,10 @@ class SettingsStore {
       this.data.mcpServers = remote.mcpServers
       this.data.dalveVoice = remote.dalveVoice
       this.data.dalveMemory = remote.dalveMemory
+      if (remote.geminiApiKey) this.data.geminiApiKey = encrypt(remote.geminiApiKey)
+      if (remote.composioApiKey) this.data.composioApiKey = encrypt(remote.composioApiKey)
       this.persist()
+      this.notifyRenderer()
     } finally {
       this.applyingRemote = false
     }
@@ -141,11 +162,13 @@ class SettingsStore {
   setGeminiApiKey(key: string): void {
     this.data.geminiApiKey = key ? encrypt(key) : undefined
     this.persist()
+    this.notifyChange()
   }
 
   setComposioApiKey(key: string): void {
     this.data.composioApiKey = key ? encrypt(key) : undefined
     this.persist()
+    this.notifyChange()
   }
 
   /** Main-process-only accessor. Never exposed to the renderer over IPC. */

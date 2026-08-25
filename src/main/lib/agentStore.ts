@@ -1,7 +1,12 @@
-import { app } from 'electron'
+import { app, type BrowserWindow } from 'electron'
 import { join } from 'path'
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
 import type { AgentConfig } from '@shared/types'
+
+let win: BrowserWindow | null = null
+export function attachWindow(window: BrowserWindow): void {
+  win = window
+}
 
 function agentsPath(): string {
   return join(app.getPath('userData'), 'dalve-agents.json')
@@ -11,60 +16,22 @@ function id(): string {
   return `agent_${Date.now()}_${Math.floor(Math.random() * 1e6)}`
 }
 
-function defaultCompanions(): AgentConfig[] {
-  const now = Date.now()
-  const base = (
-    name: string,
-    color: string,
-    systemPrompt: string,
-    voice: string
-  ): AgentConfig => ({
-    id: id(),
-    name,
-    type: 'companion',
-    parentId: null,
-    color,
-    systemPrompt,
-    toolScope: [],
-    memory: '',
-    voice,
-    status: 'idle',
-    archived: false,
-    createdAt: now,
-    updatedAt: now
-  })
-
-  return [
-    base(
-      'Email',
-      '#d4af37',
-      'You are Email, DALVE’s companion for inbox triage and correspondence. You read, summarize, draft, and send email on the user’s behalf via Gmail. You are precise about who a message is from, what it asks for, and what reply (if any) is warranted. You never send anything without being clearly asked to.',
-      'Kore'
-    ),
-    base(
-      'Finance',
-      '#c9a227',
-      'You are Finance, DALVE’s companion for money matters. You check balances, payments, invoices, and transaction activity via Stripe and related tools. You report numbers exactly as retrieved, flag anything unusual, and never take an action that moves money without explicit confirmation.',
-      'Charon'
-    ),
-    base(
-      'Messaging',
-      '#e0b84a',
-      'You are Messaging, DALVE’s companion for chat and messaging apps like WhatsApp. You read recent conversations, summarize them, and send messages on the user’s behalf when clearly instructed. You preserve the user’s tone and never send anything without being clearly asked to.',
-      'Puck'
-    ),
-    base(
-      'Builder',
-      '#f2d06b',
-      'You are Builder, a product and engineering strategist obsessed with shipping. You think in systems — architecture, roadmaps, technical debt, go-to-market strategy. You own the vision of what gets built and why. You work backward from outcomes: what does the user need to win? What’s blocking it? You communicate with clarity and conviction.',
-      'Fenrir'
-    )
-  ]
-}
+// One-time cleanup for a shipping bug: an auto-seed that used to run here created these 4
+// placeholder companions on any machine that happened to launch with no local agents file yet
+// (e.g. after a crash mid-write), and cloud sync then treated them as real user data and synced
+// them everywhere. The seed is gone; this fingerprint lets pruneKnownSeedArtifacts() find and
+// permanently remove any that already got created, on every device, automatically.
+const KNOWN_BAD_SEED_FINGERPRINTS: { name: string; color: string }[] = [
+  { name: 'Email', color: '#d4af37' },
+  { name: 'Finance', color: '#c9a227' },
+  { name: 'Messaging', color: '#e0b84a' },
+  { name: 'Builder', color: '#f2d06b' }
+]
 
 class AgentStore {
   private data: AgentConfig[]
   private changeListener: (() => void) | null = null
+  private deleteListener: ((id: string) => void) | null = null
   /** True while applying a remote (cloud) update — suppresses re-pushing it right back to the
    *  cloud, which would otherwise ping-pong forever between devices. */
   private applyingRemote = false
@@ -78,8 +45,22 @@ class AgentStore {
     this.changeListener = cb
   }
 
+  /** cloudSync registers this once signed in — called after every LOCAL permanent deletion, so
+   *  it cascades to the cloud row instead of the union-merge resurrecting it on next sign-in. */
+  setDeleteListener(cb: ((id: string) => void) | null): void {
+    this.deleteListener = cb
+  }
+
   private notifyChange(): void {
     if (!this.applyingRemote) this.changeListener?.()
+    this.notifyRenderer()
+  }
+
+  /** Always fires, including for remote-applied changes — the whole point being that a change
+   *  arriving from another device via cloud sync needs to show up on screen without the user
+   *  having to sign out and back in to force a re-fetch. */
+  private notifyRenderer(): void {
+    win?.webContents.send('agents:changed')
   }
 
   /**
@@ -99,6 +80,7 @@ class AgentStore {
         return // local copy is newer, keep it — it'll get pushed back up on its own
       }
       this.persist()
+      this.notifyRenderer()
     } finally {
       this.applyingRemote = false
     }
@@ -111,6 +93,7 @@ class AgentStore {
     try {
       this.data = agents
       this.persist()
+      this.notifyRenderer()
     } finally {
       this.applyingRemote = false
     }
@@ -118,16 +101,11 @@ class AgentStore {
 
   private load(): AgentConfig[] {
     const path = agentsPath()
-    if (!existsSync(path)) {
-      const seeded = defaultCompanions()
-      this.data = seeded
-      this.persist()
-      return seeded
-    }
+    if (!existsSync(path)) return []
     try {
       return JSON.parse(readFileSync(path, 'utf-8'))
     } catch {
-      return defaultCompanions()
+      return []
     }
   }
 
@@ -183,6 +161,44 @@ class AgentStore {
 
   setStatus(agentId: string, status: AgentConfig['status']): AgentConfig | undefined {
     return this.update(agentId, { status })
+  }
+
+  /** Permanent delete (unlike archive/restore, this cannot be undone from the UI). Cascades to
+   *  the cloud row so it doesn't come back on the next sign-in reconciliation. */
+  remove(agentId: string): boolean {
+    const before = this.data.length
+    this.data = this.data.filter((a) => a.id !== agentId)
+    if (this.data.length === before) return false
+    this.persist()
+    if (!this.applyingRemote) this.deleteListener?.(agentId)
+    this.notifyRenderer()
+    return true
+  }
+
+  /** Applies a deletion that originated on another device — removes locally without cascading
+   *  a redundant delete back to the cloud. */
+  applyRemoteDelete(agentId: string): void {
+    this.applyingRemote = true
+    try {
+      this.data = this.data.filter((a) => a.id !== agentId)
+      this.persist()
+      this.notifyRenderer()
+    } finally {
+      this.applyingRemote = false
+    }
+  }
+
+  /** See KNOWN_BAD_SEED_FINGERPRINTS above. Returns the ids removed, if any. */
+  pruneKnownSeedArtifacts(): string[] {
+    const toRemove = this.data.filter(
+      (a) =>
+        a.type === 'companion' &&
+        a.parentId === null &&
+        a.toolScope.length === 0 &&
+        KNOWN_BAD_SEED_FINGERPRINTS.some((f) => f.name === a.name && f.color === a.color)
+    )
+    for (const a of toRemove) this.remove(a.id)
+    return toRemove.map((a) => a.id)
   }
 }
 

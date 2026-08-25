@@ -120,6 +120,7 @@ function ArchivedDropdown(): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const agents = useAgentsStore((s) => s.agents)
   const restore = useAgentsStore((s) => s.restore)
+  const remove = useAgentsStore((s) => s.remove)
   const archived = agents.filter((a) => a.archived)
 
   return (
@@ -177,12 +178,24 @@ function ArchivedDropdown(): React.JSX.Element {
                 <span style={{ width: 8, height: 8, borderRadius: 3, background: a.color }} />
                 <span style={{ fontSize: 12.5, color: 'var(--c-text-1)' }}>{a.name}</span>
               </div>
-              <button
-                onClick={() => restore(a.id)}
-                style={{ fontSize: 11, color: 'var(--c-gold-bright)' }}
-              >
-                Restore
-              </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <button
+                  onClick={() => restore(a.id)}
+                  style={{ fontSize: 11, color: 'var(--c-gold-bright)' }}
+                >
+                  Restore
+                </button>
+                <button
+                  onClick={() => {
+                    if (window.confirm(`Permanently delete ${a.name}? This cannot be undone and removes it everywhere it's synced.`)) {
+                      remove(a.id)
+                    }
+                  }}
+                  style={{ fontSize: 11, color: 'var(--c-text-3)' }}
+                >
+                  Delete forever
+                </button>
+              </div>
             </div>
           ))}
         </div>

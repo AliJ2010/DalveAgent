@@ -62,6 +62,8 @@ export async function signOut(): Promise<void> {
   if (client) await client.auth.signOut()
   currentUserId = null
   agentStore.setChangeListener(null)
+  agentStore.setDeleteListener(null)
+  settingsStore.setChangeListener(null)
   if (channel) {
     await getClient().removeChannel(channel)
     channel = null
@@ -116,6 +118,12 @@ async function pushAllAgents(): Promise<void> {
   if (error) console.error('[cloudSync] failed to push agents:', error)
 }
 
+async function deleteAgentCloud(id: string): Promise<void> {
+  if (!currentUserId) return
+  const { error } = await getClient().from('agents').delete().eq('id', id)
+  if (error) console.error('[cloudSync] failed to delete agent:', error)
+}
+
 async function pushSettings(): Promise<void> {
   if (!currentUserId) return
   const s = settingsStore.getState()
@@ -127,6 +135,10 @@ async function pushSettings(): Promise<void> {
       mcp_servers: s.mcpServers,
       dalve_voice: s.dalveVoice,
       dalve_memory: s.dalveMemory,
+      // Plaintext in the cloud row (RLS-protected, same as every other row) so a key entered on
+      // one device shows up "set" on every other device signed into this account.
+      gemini_api_key: settingsStore.getGeminiApiKey() ?? null,
+      composio_api_key: settingsStore.getComposioApiKey() ?? null,
       updated_at: Date.now()
     })
   if (error) console.error('[cloudSync] failed to push settings:', error)
@@ -198,11 +210,16 @@ async function onSignedIn(): Promise<void> {
       if (!existing || (c.connected && !existing.connected)) byAppKey.set(c.appKey, c)
     }
 
+    // Same idea for API keys: whichever side actually has a value wins, preferring the cloud's
+    // (in case a third device already updated it) but falling back to local so a key already
+    // sitting on this machine never gets wiped out by an empty/legacy cloud row.
     settingsStore.applyRemote({
       composioConnections: Array.from(byAppKey.values()),
       mcpServers: cloudSettings.mcp_servers ?? [],
       dalveVoice: cloudSettings.dalve_voice,
-      dalveMemory: mergedMemoryLines.join('\n')
+      dalveMemory: mergedMemoryLines.join('\n'),
+      geminiApiKey: (cloudSettings.gemini_api_key as string) || settingsStore.getGeminiApiKey(),
+      composioApiKey: (cloudSettings.composio_api_key as string) || settingsStore.getComposioApiKey()
     })
     // The merge just produced a state neither side had exactly — write it back up so the cloud
     // (and thus every other device) sees the merged result too, not just this one.
@@ -212,7 +229,17 @@ async function onSignedIn(): Promise<void> {
   }
 
   agentStore.setChangeListener(() => void pushAllAgents())
+  agentStore.setDeleteListener((id) => void deleteAgentCloud(id))
   settingsStore.setChangeListener(() => void pushSettings())
+
+  // Bug cleanup (see KNOWN_BAD_SEED_FINGERPRINTS in agentStore.ts): the union-merge above may
+  // have just pulled down stale seed-artifact agents from another device, or this device may
+  // already have its own local ones. Listeners are wired above, so any removal here correctly
+  // cascades a delete to the cloud row too instead of it reappearing on the next sign-in.
+  const pruned = agentStore.pruneKnownSeedArtifacts()
+  if (pruned.length > 0) {
+    console.log(`[cloudSync] removed ${pruned.length} stale seed-artifact agent(s) from this account`)
+  }
 
   channel = supa
     .channel('dalve-sync')
@@ -220,7 +247,11 @@ async function onSignedIn(): Promise<void> {
       'postgres_changes',
       { event: '*', schema: 'public', table: 'agents', filter: `user_id=eq.${currentUserId}` },
       (payload) => {
-        if (payload.eventType === 'DELETE') return
+        if (payload.eventType === 'DELETE') {
+          const oldId = (payload.old as { id?: string } | null)?.id
+          if (oldId) agentStore.applyRemoteDelete(oldId)
+          return
+        }
         agentStore.applyRemote(rowToAgent(payload.new))
       }
     )
@@ -234,7 +265,9 @@ async function onSignedIn(): Promise<void> {
           composioConnections: (row.composio_connections as never) ?? [],
           mcpServers: (row.mcp_servers as never) ?? [],
           dalveVoice: row.dalve_voice as string,
-          dalveMemory: (row.dalve_memory as string) ?? ''
+          dalveMemory: (row.dalve_memory as string) ?? '',
+          geminiApiKey: (row.gemini_api_key as string) || undefined,
+          composioApiKey: (row.composio_api_key as string) || undefined
         })
       }
     )

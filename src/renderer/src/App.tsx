@@ -12,6 +12,7 @@ import { AutonomousTaskOverlay } from './components/AutonomousTaskOverlay'
 import { AuthScreen } from './components/AuthScreen'
 import { useUiStore } from './state/uiStore'
 import { useSettingsStore } from './state/settingsStore'
+import { useAgentsStore } from './state/agentsStore'
 import { useAuthStore } from './state/authStore'
 import {
   initVoiceBridge,
@@ -38,6 +39,16 @@ function App(): React.JSX.Element {
     initAutonomousTaskBridge()
     initWakeTriggerBridge()
     void useSettingsStore.getState().refresh()
+    void useAgentsStore.getState().refresh()
+
+    // Cross-device sync landing while the app is open — a change made on another signed-in
+    // device shows up here live instead of requiring a sign-out/sign-in to force a re-fetch.
+    const unsubSettings = window.dalve.settings.onChanged(() => void useSettingsStore.getState().refresh())
+    const unsubAgents = window.dalve.agents.onChanged(() => void useAgentsStore.getState().refresh())
+    return () => {
+      unsubSettings()
+      unsubAgents()
+    }
   }, [authStatus])
 
   useEffect(() => {

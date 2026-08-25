@@ -12,6 +12,7 @@ interface AgentsStoreState {
   update: (id: string, patch: Partial<AgentConfig>) => Promise<void>
   archive: (id: string) => Promise<void>
   restore: (id: string) => Promise<void>
+  remove: (id: string) => Promise<void>
   setStatus: (id: string, status: AgentConfig['status']) => void
   selectAgent: (id: string | null) => void
   setShowArchived: (show: boolean) => void
@@ -57,6 +58,12 @@ export const useAgentsStore = create<AgentsStoreState>((set, get) => ({
     const updated = await window.dalve.agents.restore(id)
     if (!updated) return
     set({ agents: get().agents.map((a) => (a.id === id ? updated : a)) })
+  },
+
+  remove: async (id) => {
+    const ok = await window.dalve.agents.remove(id)
+    if (!ok) return
+    set({ agents: get().agents.filter((a) => a.id !== id) })
   },
 
   // Optimistic, in-memory only — used to visualize live run state; the orchestrator phase

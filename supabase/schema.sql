@@ -5,9 +5,11 @@
 -- nothing custom to build there. Row Level Security below means a signed-in user can only ever
 -- see their OWN rows, enforced by Postgres itself, not by application code that could have bugs.
 --
--- Deliberately NOT stored here: Gemini/Composio API keys (stay device-local, same as today —
--- syncing them would mean the server can read them in plaintext, which defeats the point of
--- encrypting them at all), current screen/mouse/window state, local file paths, OS permissions.
+-- Gemini/Composio API keys ARE stored here (plaintext column, protected the same way as every
+-- other row: RLS below means only the owning signed-in user can ever read their own row, plus
+-- Supabase's at-rest encryption and TLS in transit) so a key entered on one device shows up on
+-- every other device signed into the same account. Still NOT stored: current screen/mouse/window
+-- state, local file paths, OS permissions — those stay device-local on purpose.
 
 create table if not exists public.agents (
   id text primary key,
@@ -33,8 +35,14 @@ create table if not exists public.settings (
   mcp_servers jsonb not null default '[]',
   dalve_voice text not null default 'Kore',
   dalve_memory text not null default '',
+  gemini_api_key text,
+  composio_api_key text,
   updated_at bigint not null default (extract(epoch from now()) * 1000)
 );
+
+-- If you already ran this file once before these two columns existed, run this too:
+-- alter table public.settings add column if not exists gemini_api_key text;
+-- alter table public.settings add column if not exists composio_api_key text;
 
 create table if not exists public.journal_entries (
   user_id uuid not null references auth.users(id) on delete cascade,
