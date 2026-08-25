@@ -27,9 +27,11 @@ export function SettingsScreen(): React.JSX.Element {
   const [mcpUrl, setMcpUrl] = useState('')
   const [mcpAuthHeader, setMcpAuthHeader] = useState('')
   const [mcpAuthToken, setMcpAuthToken] = useState('')
+  const [appVersion, setAppVersion] = useState<string | null>(null)
 
   useEffect(() => {
     refresh()
+    void window.dalve.app.getVersion().then(setAppVersion)
   }, [refresh])
 
   function flash(msg: string): void {
@@ -79,7 +81,7 @@ export function SettingsScreen(): React.JSX.Element {
             Settings
           </h1>
           <p style={{ fontSize: 13, color: 'var(--c-text-2)' }}>
-            Keys are encrypted at rest on this machine and never leave it.
+            Keys are encrypted at rest and synced to your account so every signed-in device has them.
           </p>
         </div>
 
@@ -264,6 +266,12 @@ export function SettingsScreen(): React.JSX.Element {
             </button>
           </div>
         </Section>
+
+        {appVersion && (
+          <div style={{ fontSize: 11, color: 'var(--c-text-3)', textAlign: 'center' }}>
+            DALVE v{appVersion}
+          </div>
+        )}
       </div>
     </div>
   )

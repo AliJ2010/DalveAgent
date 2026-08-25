@@ -10,6 +10,7 @@ import { AgentsCanvas } from './components/AgentsCanvas'
 import { ScreenControlOverlay } from './components/ScreenControlOverlay'
 import { AutonomousTaskOverlay } from './components/AutonomousTaskOverlay'
 import { AuthScreen } from './components/AuthScreen'
+import { VersionPopup } from './components/VersionPopup'
 import { useUiStore } from './state/uiStore'
 import { useSettingsStore } from './state/settingsStore'
 import { useAgentsStore } from './state/agentsStore'
@@ -74,6 +75,7 @@ function App(): React.JSX.Element {
 
   return (
     <div style={{ display: 'flex', position: 'fixed', inset: 0, background: 'var(--c-void)' }}>
+      <VersionPopup />
       <ScreenControlOverlay />
       <AutonomousTaskOverlay />
       <Sidebar />

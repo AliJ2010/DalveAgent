@@ -10,6 +10,11 @@ import type {
 } from '@shared/types'
 
 const dalveApi = {
+  app: {
+    getVersion: (): Promise<string> => ipcRenderer.invoke('app:getVersion'),
+    checkVersionUpdate: (): Promise<{ version: string; justUpdated: boolean; previousVersion?: string }> =>
+      ipcRenderer.invoke('app:checkVersionUpdate')
+  },
   settings: {
     get: (): Promise<SettingsState> => ipcRenderer.invoke('settings:get'),
     setGeminiKey: (key: string): Promise<SettingsState> =>

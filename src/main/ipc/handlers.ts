@@ -1,4 +1,4 @@
-import { ipcMain, shell, BrowserWindow } from 'electron'
+import { app, ipcMain, shell, BrowserWindow } from 'electron'
 import { settingsStore } from '../lib/settingsStore'
 import { agentStore } from '../lib/agentStore'
 import { generateAgentFromPrompt } from '../lib/agentGenerator'
@@ -10,6 +10,12 @@ import * as cloudSync from '../lib/cloudSync'
 import type { AgentConfig } from '@shared/types'
 
 export function registerIpcHandlers(): void {
+  // Lets the UI show the real running version, e.g. to confirm an auto-update actually landed
+  // instead of just trusting that it did.
+  ipcMain.handle('app:getVersion', () => app.getVersion())
+  // Called once at launch to drive the "you're on vX" / "just updated to vX" startup popup.
+  ipcMain.handle('app:checkVersionUpdate', () => settingsStore.checkVersionUpdate(app.getVersion()))
+
   // --- Settings ---
   ipcMain.handle('settings:get', () => settingsStore.getState())
 

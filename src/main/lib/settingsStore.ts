@@ -17,6 +17,9 @@ interface StoredSecrets {
   mcpServers: (Omit<McpServerConfig, 'authToken'> & { authToken?: string })[] // authToken is encrypted
   dalveVoice: string
   dalveMemory: string
+  /** Local-only, deliberately not in SyncableSettings — this device's own last-seen version, so
+   *  the "you just got updated to vX" popup can tell new-to-this-device apart from every launch. */
+  lastSeenVersion?: string
 }
 
 function defaultStore(): StoredSecrets {
@@ -157,6 +160,19 @@ class SettingsStore {
     this.data.dalveMemory = memory
     this.persist()
     this.notifyChange()
+  }
+
+  /**
+   * Called once per launch. Compares the currently-running version against whatever this
+   * device last recorded, so the UI can honestly say "just updated to vX" only when that's
+   * actually true, instead of showing it on every single launch regardless.
+   */
+  checkVersionUpdate(currentVersion: string): { version: string; justUpdated: boolean; previousVersion?: string } {
+    const previousVersion = this.data.lastSeenVersion
+    const justUpdated = previousVersion !== undefined && previousVersion !== currentVersion
+    this.data.lastSeenVersion = currentVersion
+    this.persist()
+    return { version: currentVersion, justUpdated, previousVersion }
   }
 
   setGeminiApiKey(key: string): void {
