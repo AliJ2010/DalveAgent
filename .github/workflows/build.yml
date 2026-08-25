@@ -17,9 +17,9 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            script: build:win
+            script: build:win:publish
           - os: macos-latest
-            script: build:mac
+            script: build:mac:publish
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -30,31 +30,16 @@ jobs:
 
       - run: npm ci
 
+      # Every push gets its own strictly-increasing version (0.1.<run number>) purely so the
+      # in-app auto-updater has something to compare against — nobody has to remember to bump
+      # package.json by hand. This only edits the ephemeral CI checkout, never the repo.
+      - run: npm pkg set version=0.1.${{ github.run_number }}
+
+      # electron-builder's own --publish (not a separate upload action) is what makes real
+      # auto-update possible: it creates/updates a proper versioned GitHub release AND generates
+      # the latest.yml / latest-mac.yml update-feed files electron-updater reads. Both OS jobs
+      # publish to the same release (matched by version); electron-builder adds assets rather
+      # than replacing the release, so Windows and Mac builds don't clobber each other.
       - run: npm run ${{ matrix.script }}
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: dalve-${{ matrix.os }}
-          path: |
-            dist/*.exe
-            dist/*.dmg
-            dist/*.zip
-          if-no-files-found: ignore
-
-      # Publishes straight to a permanent public "latest" release on every push — this is what
-      # makes it a real download link instead of something only reachable via `gh`/API auth.
-      # Both OS jobs upload to the SAME release tag; action-gh-release adds to an existing
-      # release's assets rather than replacing the whole thing, so Windows and Mac builds don't
-      # clobber each other.
-      - name: Publish to latest release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: latest
-          name: DALVE
-          prerelease: true
-          files: |
-            dist/*.exe
-            dist/*.dmg
-            dist/*.zip
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

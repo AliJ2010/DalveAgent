@@ -18,7 +18,9 @@
     "build:unpack": "npm run build && electron-builder --dir",
     "build:win": "npm run build && electron-builder --win",
     "build:mac": "electron-vite build && electron-builder --mac",
-    "build:linux": "electron-vite build && electron-builder --linux"
+    "build:linux": "electron-vite build && electron-builder --linux",
+    "build:win:publish": "npm run build && electron-builder --win --publish always",
+    "build:mac:publish": "electron-vite build && electron-builder --mac --publish always"
   },
   "dependencies": {
     "@composio/core": "^0.17.0",
@@ -27,6 +29,7 @@
     "@google/genai": "^2.18.0",
     "@supabase/supabase-js": "^2.112.4",
     "dagre": "^0.8.5",
+    "electron-updater": "^6.8.9",
     "lucide-react": "^1.33.0",
     "reactflow": "^11.11.4",
     "robotjs": "^0.9.1",

@@ -15,7 +15,11 @@ asarUnpack:
 win:
   executableName: DALVE
 nsis:
-  artifactName: ${name}-${version}-setup.${ext}
+  # Version-free filename on purpose: the download page links directly to this exact name via
+  # GitHub's "latest release" redirect (github.com/OWNER/REPO/releases/latest/download/<name>),
+  # which always serves the newest release's asset. A versioned filename would 404 every time
+  # the version bumps, since old release assets keep their own literal name forever.
+  artifactName: ${productName}-Setup.${ext}
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
@@ -27,8 +31,13 @@ mac:
     - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
   notarize: false
+  # zip is required by Squirrel.Mac (the mac auto-update mechanism) alongside the dmg — it's
+  # what the in-app updater actually downloads and applies; the dmg stays for manual installs.
+  target:
+    - dmg
+    - zip
 dmg:
-  artifactName: ${name}-${version}.${ext}
+  artifactName: ${productName}.${ext}
 linux:
   target:
     - AppImage
@@ -40,5 +49,6 @@ appImage:
   artifactName: ${name}-${version}.${ext}
 npmRebuild: false
 publish:
-  provider: generic
-  url: https://example.com/auto-updates
+  provider: github
+  owner: AliJ2010
+  repo: DalveAgent

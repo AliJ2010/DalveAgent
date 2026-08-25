@@ -8,6 +8,7 @@ import { attachWindow as attachScreenControlWindow, stopAll as stopScreenControl
 import { attachWindow as attachAutonomousTaskWindow, stopAutonomousTask } from './lib/autonomousTask'
 import { attachWindow as attachAgentStoreWindow } from './lib/agentStore'
 import { attachWindow as attachSettingsStoreWindow } from './lib/settingsStore'
+import { initAutoUpdate } from './lib/autoUpdate'
 
 // Belt-and-suspenders alongside the lazy singletons in settingsStore/agentStore: pin the app
 // name explicitly so userData resolves to the same %APPDATA%\dalve folder in dev and packaged
@@ -186,6 +187,7 @@ if (gotSingleInstanceLock) {
 
     createWindow()
     createTray()
+    initAutoUpdate()
 
     // Voice wake-word ("Hey DALVE") was tried via two different offline engines and dropped —
     // neither reliably recognized the phrase. This hotkey is the replacement: free, instant,

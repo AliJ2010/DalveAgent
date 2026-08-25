@@ -1,0 +1,237 @@
+<title>Get DALVE</title>
+<style>
+  :root {
+    --c-void: #050403;
+    --c-bg-soft: #0d0b0f;
+    --c-panel: rgba(18, 15, 12, 0.72);
+    --c-panel-border: rgba(212, 175, 55, 0.16);
+    --c-panel-border-strong: rgba(212, 175, 55, 0.32);
+    --c-gold: #d4af37;
+    --c-gold-bright: #f2d06b;
+    --c-gold-dim: #8a6f26;
+    --c-warm-white: #f5ecd8;
+    --c-text-1: rgba(245, 238, 224, 0.92);
+    --c-text-2: rgba(245, 238, 224, 0.6);
+    --c-text-3: rgba(245, 238, 224, 0.4);
+    --c-status-active: #6fe08a;
+  }
+
+  * {
+    box-sizing: border-box;
+    margin: 0;
+  }
+
+  html, body {
+    height: 100%;
+  }
+
+  body {
+    background: var(--c-void);
+    color: var(--c-text-1);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100%;
+    padding: 72px 24px 40px;
+    position: relative;
+    overflow-x: hidden;
+  }
+
+  /* Faint ambient particle field, echoing the app's own sphere motif — quiet, not a hero. */
+  .field {
+    position: fixed;
+    inset: 0;
+    background-image:
+      radial-gradient(1px 1px at 12% 22%, rgba(212,175,55,0.35), transparent),
+      radial-gradient(1px 1px at 78% 18%, rgba(212,175,55,0.28), transparent),
+      radial-gradient(1.5px 1.5px at 34% 68%, rgba(212,175,55,0.22), transparent),
+      radial-gradient(1px 1px at 88% 76%, rgba(212,175,55,0.3), transparent),
+      radial-gradient(1px 1px at 60% 42%, rgba(212,175,55,0.18), transparent),
+      radial-gradient(1.5px 1.5px at 8% 82%, rgba(212,175,55,0.25), transparent);
+    background-size: 100% 100%;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .content {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    max-width: 720px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+  }
+
+  .wordmark {
+    text-transform: uppercase;
+    letter-spacing: 0.28em;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--c-gold);
+  }
+
+  .wordmark sup {
+    font-size: 8px;
+    color: var(--c-gold-dim);
+  }
+
+  h1 {
+    margin-top: 28px;
+    font-size: clamp(32px, 5vw, 44px);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--c-warm-white);
+    text-wrap: balance;
+  }
+
+  .tagline {
+    margin-top: 14px;
+    font-size: 16px;
+    color: var(--c-text-2);
+    max-width: 46ch;
+    text-wrap: balance;
+  }
+
+  .platforms {
+    margin-top: 56px;
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+
+  @media (max-width: 560px) {
+    .platforms { grid-template-columns: 1fr; }
+  }
+
+  .card {
+    background: var(--c-panel);
+    border: 1px solid var(--c-panel-border);
+    border-radius: 16px;
+    padding: 28px 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    transition: border-color 160ms ease, transform 160ms ease;
+  }
+
+  .card.recommended {
+    border-color: var(--c-panel-border-strong);
+    box-shadow: 0 0 40px rgba(212, 175, 55, 0.08);
+  }
+
+  .card-icon {
+    width: 40px;
+    height: 40px;
+    color: var(--c-gold-bright);
+  }
+
+  .card-os {
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--c-text-1);
+  }
+
+  .card-badge {
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--c-status-active);
+  }
+
+  .download-btn {
+    margin-top: 4px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 26px;
+    border-radius: 999px;
+    background: var(--c-gold);
+    color: #050403;
+    font-weight: 600;
+    font-size: 14px;
+    text-decoration: none;
+    border: 1px solid var(--c-gold);
+    transition: background 140ms ease, transform 140ms ease;
+  }
+
+  .download-btn:hover {
+    background: var(--c-gold-bright);
+    border-color: var(--c-gold-bright);
+    transform: translateY(-1px);
+  }
+
+  .card-note {
+    font-size: 12px;
+    color: var(--c-text-3);
+  }
+
+  .footnote {
+    margin-top: 48px;
+    font-size: 12px;
+    color: var(--c-text-3);
+    max-width: 50ch;
+    text-wrap: balance;
+  }
+
+  .footnote a {
+    color: var(--c-text-2);
+  }
+</style>
+
+<div class="field"></div>
+
+<div class="content">
+  <div class="wordmark">DALVE_OS<sup>™</sup></div>
+  <h1>Your assistant, wherever you are.</h1>
+  <p class="tagline">
+    One account. Voice, agents, and memory synced across every machine you sign into.
+  </p>
+
+  <div class="platforms">
+    <div class="card recommended" id="card-win">
+      <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+        <path d="M3 5.5 10.5 4.4V11H3V5.5Z"/>
+        <path d="M11.5 4.3 21 3v8H11.5V4.3Z"/>
+        <path d="M3 12h7.5v6.6L3 17.5V12Z"/>
+        <path d="M11.5 12H21v9l-9.5-1.3V12Z"/>
+      </svg>
+      <div class="card-os">Windows</div>
+      <div class="card-badge" id="badge-win" style="visibility:hidden">Recommended for you</div>
+      <a class="download-btn" href="https://github.com/AliJ2010/DalveAgent/releases/latest/download/DALVE-Setup.exe">
+        Download for Windows
+      </a>
+      <div class="card-note">.exe installer &middot; Windows 10/11</div>
+    </div>
+
+    <div class="card" id="card-mac">
+      <svg class="card-icon" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M16.7 12.7c0-2.2 1.8-3.3 1.9-3.4-1-1.5-2.6-1.7-3.2-1.7-1.4-.1-2.6.8-3.3.8-.7 0-1.8-.8-2.9-.8-1.5 0-2.9.9-3.7 2.2-1.6 2.7-.4 6.8 1.1 9 .8 1.1 1.7 2.3 2.9 2.3 1.2 0 1.6-.7 3-.7s1.8.7 3 .7c1.2 0 2-1.1 2.8-2.2.9-1.3 1.2-2.5 1.3-2.6-.1 0-2.4-.9-2.9-3.6ZM14.3 6c.6-.8 1.1-1.9 1-3-1 0-2.1.6-2.8 1.4-.6.7-1.1 1.9-1 3 1.1.1 2.2-.6 2.8-1.4Z"/>
+      </svg>
+      <div class="card-os">macOS</div>
+      <div class="card-badge" id="badge-mac" style="visibility:hidden">Recommended for you</div>
+      <a class="download-btn" href="https://github.com/AliJ2010/DalveAgent/releases/latest/download/DALVE.dmg">
+        Download for Mac
+      </a>
+      <div class="card-note">.dmg &middot; Apple Silicon &amp; Intel</div>
+    </div>
+  </div>
+
+  <p class="footnote">
+    Unsigned build — Windows/macOS may warn before opening it the first time. That's expected;
+    choose "Run anyway" / "Open" to continue.
+  </p>
+</div>
+
+<script>
+  var isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+  document.getElementById(isMac ? 'card-mac' : 'card-win').classList.add('recommended');
+  document.getElementById(isMac ? 'badge-mac' : 'badge-win').style.visibility = 'visible';
+</script>
