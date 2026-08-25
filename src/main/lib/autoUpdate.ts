@@ -1,10 +1,18 @@
 import { autoUpdater } from 'electron-updater'
 import { app } from 'electron'
+import * as geminiLive from './geminiLive'
+import * as autonomousTask from './autonomousTask'
 
 /**
  * Real self-update: checks the app's own GitHub releases, downloads a newer build in the
- * background, and installs it automatically the next time the app quits — no redownloading the
- * installer by hand.
+ * background, and installs itself as soon as it's safe to — no manual quit-then-quit-again
+ * dance, and no redownloading the installer by hand.
+ *
+ * "As soon as it's safe" means not mid-conversation and not mid-autonomous-task: restarting the
+ * process the instant a download finishes would silently cut off whatever the user is doing.
+ * Checked on an interval instead of via an event hook (simplest way to react to "the user is done
+ * talking" without wiring a new callback through geminiLive/autonomousTask) — a stray extra
+ * 15-second wait after a conversation ends is a non-issue, an update landing mid-sentence isn't.
  *
  * macOS caveat: Squirrel.Mac (the mechanism this uses on Mac) refuses to apply an update unless
  * the app is code-signed and notarized, which needs a paid Apple Developer account — not
@@ -17,13 +25,25 @@ export function initAutoUpdate(): void {
   if (!app.isPackaged) return
 
   autoUpdater.autoDownload = true
-  autoUpdater.autoInstallOnAppQuit = true
+  // We drive the install moment ourselves (see below) instead of letting electron-updater apply
+  // it silently on whatever quit happens to come next.
+  autoUpdater.autoInstallOnAppQuit = false
+
+  let installTimer: ReturnType<typeof setInterval> | null = null
 
   autoUpdater.on('error', (err) => console.error('[autoUpdate] error:', err))
   autoUpdater.on('update-available', (info) => console.log('[autoUpdate] downloading update:', info.version))
-  autoUpdater.on('update-downloaded', (info) =>
-    console.log('[autoUpdate] update ready, installs on next quit:', info.version)
-  )
+  autoUpdater.on('update-downloaded', (info) => {
+    console.log('[autoUpdate] update downloaded, installing as soon as safe:', info.version)
+    if (installTimer) return
+    const tryInstall = (): void => {
+      if (geminiLive.isSessionActive() || autonomousTask.isActive()) return
+      if (installTimer) clearInterval(installTimer)
+      autoUpdater.quitAndInstall()
+    }
+    tryInstall() // covers the common case: nothing was happening when the download finished
+    installTimer = setInterval(tryInstall, 15000)
+  })
 
   const check = (): void => {
     autoUpdater.checkForUpdates().catch((err) => console.error('[autoUpdate] check failed:', err))
