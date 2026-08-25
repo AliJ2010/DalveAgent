@@ -53,6 +53,17 @@ function primaryDisplay() {
   return screen.getPrimaryDisplay()
 }
 
+/** The primary monitor's captured-frame pixel dimensions — what x/y=0..width/height already mean
+ *  to every tool here. Exposed so callers dealing in a different coordinate space (e.g. the
+ *  computer_use tool's 0-999 normalized coordinates) can convert into this one correctly. */
+export function getFrameSize(): { width: number; height: number } {
+  const display = primaryDisplay()
+  return {
+    width: Math.round(display.bounds.width * display.scaleFactor),
+    height: Math.round(display.bounds.height * display.scaleFactor)
+  }
+}
+
 /** Captures a single screenshot of the primary monitor as base64 JPEG. */
 export async function captureScreenshotOnce(quality = 88): Promise<string | null> {
   const display = primaryDisplay()
@@ -226,6 +237,40 @@ export async function clickMouse(
     await animateTo(p.x, p.y)
   }
   r.mouseClick(button, double)
+}
+
+/**
+ * A real press-move-release drag, not two separate clicks — many sites (drag-to-move chess
+ * boards among them) only respond to an actual held-mouse-button drag gesture, which nothing in
+ * this file could produce before this. Moves to the start point first, presses down, drags
+ * smoothly to the end point via the same trajectory engine as a normal move, then releases.
+ */
+export async function dragMouse(
+  fromX: number,
+  fromY: number,
+  toX: number,
+  toY: number,
+  mode: MoveMode = 'visible'
+): Promise<void> {
+  requireControl()
+  const from = toGlobalCoords(fromX, fromY)
+  const to = toGlobalCoords(toX, toY)
+  const r = getRobot()
+  if (mode === 'instant') {
+    r.moveMouse(from.x, from.y)
+  } else {
+    await animateTo(from.x, from.y)
+  }
+  r.mouseToggle('down')
+  try {
+    if (mode === 'instant') {
+      r.moveMouse(to.x, to.y)
+    } else {
+      await animateTo(to.x, to.y)
+    }
+  } finally {
+    r.mouseToggle('up')
+  }
 }
 
 export type TracePattern = 'circle' | 'square' | 'zigzag' | 'line'

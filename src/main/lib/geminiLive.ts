@@ -47,7 +47,7 @@ Screen sharing only ever watches the user's main/primary monitor — if somethin
 
 click_element is your default click tool on both Windows and macOS for anything with a visible label — buttons, links, menu items, tabs, form fields, icon-only nav links included. It already tries accessibility data AND real OCR internally before giving up, so you don't need to chain tools yourself. If click_element ever errors outright on macOS, the most likely cause is DALVE not yet having Accessibility permission granted in System Settings — say so plainly so the user can fix it, rather than silently downgrading to coordinates without explaining why.
 
-For grid/board content specifically — chess/checkers boards, sudoku, spreadsheets, calendars, minesweeper, anything laid out as uniform rows/columns — go straight to define_grid + click_grid_cell rather than trying click_element or click_text first. Confirmed via real testing: a chess board's squares and pieces are pure graphics with zero accessible name and zero readable text, so those tools will just fail there every time and waste a step. Call define_grid ONCE per game/session with your best visual estimate of the whole grid's outer boundary (a big, forgiving target), then click_grid_cell for every individual move after that — it computes the exact position mathematically instead of you re-guessing a small target from scratch each time. If a click still lands wrong, call define_grid again with a corrected boundary rather than continuing to guess with the same one. Genuinely non-textual, non-grid content with no label at all (a drawing canvas, a map, a free-form game) is the actual last resort for click_mouse/move_mouse.
+For grid/board content specifically — chess/checkers boards, sudoku, spreadsheets, calendars, minesweeper, anything laid out as uniform rows/columns — go straight to define_grid + click_grid_cell rather than trying click_element or click_text first. Confirmed via real testing: a chess board's squares and pieces are pure graphics with zero accessible name and zero readable text, so those tools will just fail there every time and waste a step. Call define_grid ONCE per game/session with your best visual estimate of the whole grid's outer boundary (a big, forgiving target), then click_grid_cell for every individual move after that — it computes the exact position mathematically instead of you re-guessing a small target from scratch each time. If a click still lands wrong, call define_grid again with a corrected boundary rather than continuing to guess with the same one. Many drag-to-move interfaces (chess/checkers pieces especially) don't respond to two separate clicks at all — if a piece doesn't visibly move after clicking its square then the destination, that's the signal to try drag_mouse (piece's cell center to destination cell center) instead of repeating the same click sequence. Genuinely non-textual, non-grid content with no label at all (a drawing canvas, a map, a free-form game) is the actual last resort for click_mouse/move_mouse.
 
 Clicking the wrong thing (e.g. the wrong contact in a chat list, the wrong item in a similar-looking row) is the single most common way you fail at this — the video feed is compressed and small text is easy to misread, so never click from a single glance when you're relying on pixel coordinates. Before a coordinate-based click where similar-looking rows could be confused, quickly move_mouse there first — that's free — and confirm in the next frame that the cursor actually landed on the right element before you click_mouse; skip this check when using click_element (it's already precise) or when the target is obvious and unambiguous. If a click turns out to have hit the wrong thing, say so immediately and correct it rather than continuing as if it worked. When a task spans multiple turns (e.g. "keep this conversation going without me"), re-check the screen state at the start of each new step rather than assuming it still matches what you last saw — things move, replies arrive, windows change focus.
 
@@ -203,6 +203,23 @@ const CLICK_MOUSE_TOOL: FunctionDeclaration = {
       speed: SPEED_PARAM_SCHEMA
     },
     required: ['x', 'y']
+  }
+}
+
+const DRAG_MOUSE_TOOL: FunctionDeclaration = {
+  name: 'drag_mouse',
+  description:
+    'A real press-move-release drag gesture — not two separate clicks. Use this for anything that only responds to an actual held-mouse-button drag: a chess/checkers piece, a slider, a reorderable list item, a selection rectangle. Two click_mouse calls will NOT move a chess piece on a site that requires a real drag.',
+  parametersJsonSchema: {
+    type: 'object',
+    properties: {
+      fromX: { type: 'number', description: 'Starting X pixel coordinate (where you press down).' },
+      fromY: { type: 'number', description: 'Starting Y pixel coordinate.' },
+      toX: { type: 'number', description: 'Ending X pixel coordinate (where you release).' },
+      toY: { type: 'number', description: 'Ending Y pixel coordinate.' },
+      speed: SPEED_PARAM_SCHEMA
+    },
+    required: ['fromX', 'fromY', 'toX', 'toY']
   }
 }
 
@@ -447,6 +464,7 @@ async function buildToolsForAgent(agent: AgentConfig | null): Promise<Tool[]> {
     STOP_SCREEN_SHARE_TOOL,
     MOVE_MOUSE_TOOL,
     CLICK_MOUSE_TOOL,
+    DRAG_MOUSE_TOOL,
     FIND_ELEMENTS_TOOL,
     CLICK_ELEMENT_TOOL,
     READ_SCREEN_TEXT_TOOL,
@@ -846,6 +864,15 @@ async function handleToolCalls(functionCalls: FunctionCall[]): Promise<void> {
           (args.speed as 'instant' | 'visible') ?? 'visible'
         )
         response = { result: 'Clicked.' }
+      } else if (fc.name === 'drag_mouse') {
+        await screenControl.dragMouse(
+          Number(args.fromX),
+          Number(args.fromY),
+          Number(args.toX),
+          Number(args.toY),
+          (args.speed as 'instant' | 'visible') ?? 'visible'
+        )
+        response = { result: 'Dragged.' }
       } else if (fc.name === 'find_elements') {
         if (!uiAutomation.isSupported()) {
           response = { error: 'UI element reading is not implemented on this platform — use the video feed and move_mouse/click_mouse instead.' }
