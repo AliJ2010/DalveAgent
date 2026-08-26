@@ -56,7 +56,14 @@ function App(): React.JSX.Element {
     function onKeyDown(e: KeyboardEvent): void {
       const target = e.target as HTMLElement | null
       const isTyping = target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA'
-      if (e.code === 'Space' && !isTyping && screen === 'home') {
+      // e.repeat is true for the synthetic keydown events the OS fires over and over while a key
+      // stays held — with no guard, holding (or even just slightly long-pressing) Space fired
+      // toggleVoiceSession() many times before the first call's state made it back from the main
+      // process, racing multiple concurrent start/stop calls against each other. That's the actual
+      // mechanism behind the "connecting/listening/connecting/listening" flapping and a real
+      // "reply was never sent" IPC error when an early call's webContents round-trip got orphaned
+      // by a later one superseding it.
+      if (e.code === 'Space' && !e.repeat && !isTyping && screen === 'home') {
         e.preventDefault()
         void toggleVoiceSession()
       }

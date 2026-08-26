@@ -147,11 +147,22 @@ export async function stopVoiceSession(): Promise<void> {
   useVoiceStore.getState().setAudioLevel(0)
 }
 
+let toggleInFlight = false
+
+/** Guarded against re-entrancy: isSessionRunning() only flips once the IPC round-trip to the
+ *  main process completes, so two calls fired close together (any double-trigger, not just the
+ *  keyboard shortcut) would both read the same stale state and race a start against a stop. */
 export async function toggleVoiceSession(): Promise<void> {
-  if (isSessionRunning()) {
-    await stopVoiceSession()
-  } else {
-    await startVoiceSession(useVoiceStore.getState().activeAgentId)
+  if (toggleInFlight) return
+  toggleInFlight = true
+  try {
+    if (isSessionRunning()) {
+      await stopVoiceSession()
+    } else {
+      await startVoiceSession(useVoiceStore.getState().activeAgentId)
+    }
+  } finally {
+    toggleInFlight = false
   }
 }
 
