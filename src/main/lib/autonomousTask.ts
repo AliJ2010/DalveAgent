@@ -22,6 +22,12 @@ const MAX_HISTORY = 10
 // a handful of rounds. Exists so a confused model can't loop forever burning API calls within a
 // single check instead of just calling finish_cycle and waiting for the next real observation.
 const MAX_ROUNDS_PER_TICK = 10
+// Actions that are supposed to visibly change the page — worth a real before/after check rather
+// than trusting "the click ran" as proof it worked. Ported from a verify-by-diff design the user
+// proposed: compare actual page text before and after, and tell the model plainly when nothing
+// changed instead of letting it narrate success off an unverified assumption (the real mechanism
+// behind "I can see it sent successfully" when it hadn't).
+const VERIFIABLE_ACTIONS = new Set(['browser_click', 'browser_type', 'click_element', 'click_mouse', 'click_grid_cell', 'drag_mouse', 'type_text', 'press_key'])
 
 let win: BrowserWindow | null = null
 export function attachWindow(window: BrowserWindow): void {
@@ -310,7 +316,7 @@ Real targeting priority, strongest to weakest — always use the strongest one t
 2. click_element for native desktop apps (not websites) with a visible label.
 3. click_mouse/drag_mouse/define_grid+click_grid_cell from the screenshot below — last resort, for genuinely non-web, non-textual content only (a game, a drawing canvas).
 
-You can take SEVERAL actions in a row right now before this check ends — finish a whole sequence rather than doing one micro-step and stopping. Actually check the result of each action (browser_read_text, or the next screenshot) before claiming something worked. Call finish_cycle once there's genuinely nothing further to do until the next check — never mid-sequence. Call mark_task_complete only once the ENTIRE goal is done.
+You can take several actions across this check, but for anything that changes the page (a click, typing, a key press) prefer ONE such action per turn, then look at its result before deciding the next one — every click/type/press result tells you plainly if the page's visible text didn't change at all, which means it didn't work; when you see that, do not repeat the same action, and do not claim it succeeded. Only skip this one-at-a-time discipline for pure reads (browser_read_text, browser_evaluate) — those are safe to chain. Call finish_cycle once there's genuinely nothing further to do until the next check — never mid-sequence. Call mark_task_complete only once the ENTIRE goal is done.
 
 Recent history of this task:\n${history.length > 0 ? history.join('\n') : '(nothing yet)'}`
 
@@ -383,6 +389,9 @@ Recent history of this task:\n${history.length > 0 ? history.join('\n') : '(noth
       }
 
       log.info(`[autonomousTask] executing ${call.name} args=${JSON.stringify(callArgs)}`)
+      const verifiable = VERIFIABLE_ACTIONS.has(call.name) && (await browserControl.isOpen())
+      const beforeText = verifiable ? await browserControl.getVisibleText().catch(() => null) : null
+
       let result: Record<string, unknown>
       try {
         result = await executeTool(call.name, callArgs)
@@ -390,6 +399,15 @@ Recent history of this task:\n${history.length > 0 ? history.join('\n') : '(noth
         result = { error: err instanceof Error ? err.message : String(err) }
         log.error(`[autonomousTask] ${call.name} threw:`, err)
       }
+
+      if (beforeText !== null) {
+        const afterText = await browserControl.getVisibleText().catch(() => null)
+        if (afterText !== null && afterText === beforeText) {
+          result.warning =
+            'The visible page text is IDENTICAL to before this action — nothing observably changed. Do not assume this worked. Re-observe (browser_read_text or a fresh look) before deciding what to do next, and do not repeat this exact action blindly.'
+        }
+      }
+
       log.info(`[autonomousTask] ${call.name} result=${JSON.stringify(result).slice(0, 500)}`)
       pushHistory(`${call.name}(${JSON.stringify(callArgs).slice(0, 200)}) -> ${JSON.stringify(result).slice(0, 300)}`)
       toolResults.push({ type: 'tool_result', tool_use_id: call.id, content: JSON.stringify(result).slice(0, 4000) })
