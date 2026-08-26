@@ -6,6 +6,7 @@ interface SettingsStoreState {
   loading: boolean
   refresh: () => Promise<void>
   setGeminiKey: (key: string) => Promise<void>
+  setAnthropicKey: (key: string) => Promise<void>
   setComposioKey: (key: string) => Promise<void>
   setDalveVoice: (voice: string) => Promise<void>
   setDalveMemory: (memory: string) => Promise<void>
@@ -48,6 +49,11 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
 
   setGeminiKey: async (key) => {
     const settings = await window.dalve.settings.setGeminiKey(key)
+    set({ settings })
+  },
+
+  setAnthropicKey: async (key) => {
+    const settings = await window.dalve.settings.setAnthropicKey(key)
     set({ settings })
   },
 

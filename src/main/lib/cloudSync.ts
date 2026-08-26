@@ -187,6 +187,7 @@ async function pushSettings(): Promise<void> {
       // Plaintext in the cloud row (RLS-protected, same as every other row) so a key entered on
       // one device shows up "set" on every other device signed into this account.
       gemini_api_key: settingsStore.getGeminiApiKey() ?? null,
+      anthropic_api_key: settingsStore.getAnthropicApiKey() ?? null,
       composio_api_key: settingsStore.getComposioApiKey() ?? null,
       updated_at: Date.now()
     })
@@ -268,6 +269,7 @@ async function onSignedIn(): Promise<void> {
       dalveVoice: cloudSettings.dalve_voice,
       dalveMemory: mergedMemoryLines.join('\n'),
       geminiApiKey: (cloudSettings.gemini_api_key as string) || settingsStore.getGeminiApiKey(),
+      anthropicApiKey: (cloudSettings.anthropic_api_key as string) || settingsStore.getAnthropicApiKey(),
       composioApiKey: (cloudSettings.composio_api_key as string) || settingsStore.getComposioApiKey()
     })
     // The merge just produced a state neither side had exactly — write it back up so the cloud
@@ -316,6 +318,7 @@ async function onSignedIn(): Promise<void> {
           dalveVoice: row.dalve_voice as string,
           dalveMemory: (row.dalve_memory as string) ?? '',
           geminiApiKey: (row.gemini_api_key as string) || undefined,
+          anthropicApiKey: (row.anthropic_api_key as string) || undefined,
           composioApiKey: (row.composio_api_key as string) || undefined
         })
       }

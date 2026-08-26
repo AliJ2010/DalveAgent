@@ -81,6 +81,7 @@ export interface McpServerConfig {
 
 export interface SettingsState {
   geminiApiKeySet: boolean
+  anthropicApiKeySet: boolean
   composioApiKeySet: boolean
   composioConnections: ComposioConnection[]
   mcpServers: McpServerConfig[]

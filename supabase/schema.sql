@@ -36,12 +36,14 @@ create table if not exists public.settings (
   dalve_voice text not null default 'Kore',
   dalve_memory text not null default '',
   gemini_api_key text,
+  anthropic_api_key text,
   composio_api_key text,
   updated_at bigint not null default (extract(epoch from now()) * 1000)
 );
 
--- If you already ran this file once before these two columns existed, run this too:
+-- If you already ran this file once before these columns existed, run this too:
 -- alter table public.settings add column if not exists gemini_api_key text;
+-- alter table public.settings add column if not exists anthropic_api_key text;
 -- alter table public.settings add column if not exists composio_api_key text;
 
 create table if not exists public.journal_entries (

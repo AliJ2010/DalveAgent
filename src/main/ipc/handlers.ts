@@ -24,6 +24,11 @@ export function registerIpcHandlers(): void {
     return settingsStore.getState()
   })
 
+  ipcMain.handle('settings:setAnthropicKey', (_e, key: string) => {
+    settingsStore.setAnthropicApiKey(key)
+    return settingsStore.getState()
+  })
+
   ipcMain.handle('settings:setComposioKey', async (_e, key: string) => {
     if (key) {
       await composio.validateApiKey(key)
@@ -39,6 +44,7 @@ export function registerIpcHandlers(): void {
   // Supabase schema change the user has to apply by hand first — this works regardless of that.
   ipcMain.handle('settings:getRawKeys', () => ({
     geminiApiKey: settingsStore.getGeminiApiKey() ?? null,
+    anthropicApiKey: settingsStore.getAnthropicApiKey() ?? null,
     composioApiKey: settingsStore.getComposioApiKey() ?? null
   }))
 

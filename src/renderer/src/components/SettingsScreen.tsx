@@ -9,6 +9,7 @@ export function SettingsScreen(): React.JSX.Element {
   const settings = useSettingsStore((s) => s.settings)
   const refresh = useSettingsStore((s) => s.refresh)
   const setGeminiKey = useSettingsStore((s) => s.setGeminiKey)
+  const setAnthropicKey = useSettingsStore((s) => s.setAnthropicKey)
   const setComposioKey = useSettingsStore((s) => s.setComposioKey)
   const setDalveVoice = useSettingsStore((s) => s.setDalveVoice)
   const addMcpServer = useSettingsStore((s) => s.addMcpServer)
@@ -19,6 +20,7 @@ export function SettingsScreen(): React.JSX.Element {
   const signOut = useAuthStore((s) => s.signOut)
 
   const [geminiInput, setGeminiInput] = useState('')
+  const [anthropicInput, setAnthropicInput] = useState('')
   const [composioInput, setComposioInput] = useState('')
   const [composioError, setComposioError] = useState<string | null>(null)
   const [savedNotice, setSavedNotice] = useState<string | null>(null)
@@ -44,6 +46,13 @@ export function SettingsScreen(): React.JSX.Element {
     await setGeminiKey(geminiInput.trim())
     setGeminiInput('')
     flash('Gemini API key saved')
+  }
+
+  async function saveAnthropic(): Promise<void> {
+    if (!anthropicInput.trim()) return
+    await setAnthropicKey(anthropicInput.trim())
+    setAnthropicInput('')
+    flash('Claude API key saved')
   }
 
   async function saveComposio(): Promise<void> {
@@ -121,6 +130,23 @@ export function SettingsScreen(): React.JSX.Element {
             onSubmit={saveGemini}
             saved={settings?.geminiApiKeySet}
           />
+        </Section>
+
+        <Section title="Claude (Anthropic) API key">
+          <KeyRow
+            placeholder={
+              settings?.anthropicApiKeySet
+                ? 'Key saved — enter a new key to replace it'
+                : 'Paste your Anthropic API key'
+            }
+            value={anthropicInput}
+            onChange={setAnthropicInput}
+            onSubmit={saveAnthropic}
+            saved={settings?.anthropicApiKeySet}
+          />
+          <p style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 6 }}>
+            Used as the reasoning engine for autonomous background tasks (screen/browser control).
+          </p>
         </Section>
 
         <Section title="Composio API key">

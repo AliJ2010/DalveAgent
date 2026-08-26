@@ -1,14 +1,5 @@
-import {
-  GoogleGenAI,
-  createUserContent,
-  createModelContent,
-  createPartFromFunctionCall,
-  createPartFromFunctionResponse,
-  createPartFromBase64,
-  type Content,
-  type FunctionDeclaration,
-  type Part
-} from '@google/genai'
+import Anthropic from '@anthropic-ai/sdk'
+import type { MessageParam, Tool, ToolResultBlockParam, ContentBlockParam } from '@anthropic-ai/sdk/resources/messages'
 import type { BrowserWindow } from 'electron'
 import log from 'electron-log/main'
 import { settingsStore } from './settingsStore'
@@ -19,11 +10,12 @@ import * as gridTargeting from './gridTargeting'
 import * as browserControl from './browserControl'
 import type { AutonomousTaskEvent } from '@shared/types'
 
-// A fast, cheap multimodal model for periodic polling — deliberately NOT the Live model, since
-// this runs on a timer independent of any live voice session. gemini-2.5-flash was retired by
-// Google (confirmed live via a 404 pointing here) — re-check availability periodically, same
-// caveat as LIVE_MODEL in geminiLive.ts: Google rotates these ids.
-const POLL_MODEL = 'gemini-3.7-flash'
+// Claude, not Gemini — a real reasoning-engine swap (not just a bigger model within the same
+// family), after Gemini's flash tier repeatedly showed the same "common sense"/stalling failures
+// across three prior architectures using this exact tool set. Anthropic occasionally revises
+// model ids; re-check availability if this starts 404ing.
+const POLL_MODEL = 'claude-sonnet-5'
+const MAX_OUTPUT_TOKENS = 4096
 const CHECK_INTERVAL_MS = 20_000
 const MAX_HISTORY = 10
 // Safety valve, not a normal ceiling: a real "search, open chat, type, send" sequence takes only
@@ -62,99 +54,99 @@ const SPEED_SCHEMA = { type: 'string', enum: ['instant', 'visible'] } as const
 // tabs/profile button — those aren't part of the page a Playwright Page can see at all, which is
 // the exact, root-caused mechanism behind a real reported mistake (clicking Chrome's own account
 // button because it happened to share a name with the intended WhatsApp chat).
-const BROWSER_OPEN_TOOL: FunctionDeclaration = {
+const BROWSER_OPEN_TOOL: Tool = {
   name: 'browser_open',
   description:
     "Opens a URL in DALVE's dedicated automation browser (separate window, persists logins across runs — WhatsApp Web etc. only need login once). STRONGLY PREFER this over any screen/coordinate tool for anything that's a website.",
-  parametersJsonSchema: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] }
+  input_schema: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] }
 }
-const BROWSER_CLICK_TOOL: FunctionDeclaration = {
+const BROWSER_CLICK_TOOL: Tool = {
   name: 'browser_click',
   description: 'Clicks a real element by its actual visible text/label — genuine DOM lookup, not a coordinate guess. Reports back explicitly if multiple things match rather than picking one blind.',
-  parametersJsonSchema: { type: 'object', properties: { description: { type: 'string' } }, required: ['description'] }
+  input_schema: { type: 'object', properties: { description: { type: 'string' } }, required: ['description'] }
 }
-const BROWSER_TYPE_TOOL: FunctionDeclaration = {
+const BROWSER_TYPE_TOOL: Tool = {
   name: 'browser_type',
   description: 'Clicks a field by its label/placeholder then types into it, so it actually has focus first.',
-  parametersJsonSchema: {
+  input_schema: {
     type: 'object',
     properties: { fieldDescription: { type: 'string' }, text: { type: 'string' }, pressEnter: { type: 'boolean' } },
     required: ['fieldDescription', 'text']
   }
 }
-const BROWSER_READ_TEXT_TOOL: FunctionDeclaration = {
+const BROWSER_READ_TEXT_TOOL: Tool = {
   name: 'browser_read_text',
   description: 'Real visible text of the current page (actual DOM, not OCR) — use to verify what really happened before deciding the next step.',
-  parametersJsonSchema: { type: 'object', properties: {} }
+  input_schema: { type: 'object', properties: {} }
 }
-const BROWSER_EVALUATE_TOOL: FunctionDeclaration = {
+const BROWSER_EVALUATE_TOOL: Tool = {
   name: 'browser_evaluate',
   description:
     "Runs read-only JavaScript in the current page and returns the result — for content with no accessible text/role at all but a real inspectable DOM (e.g. a chess board's pieces, which carry their position in element class names even though nothing is readable via normal text). Escape hatch: prefer browser_click/browser_type for anything with real text. Example: document.querySelectorAll('[class*=\"square\"]') style queries to read exact positions instead of guessing them visually.",
-  parametersJsonSchema: { type: 'object', properties: { script: { type: 'string', description: 'A JS expression to evaluate, e.g. "document.title" or a querySelectorAll + map returning plain data.' } }, required: ['script'] }
+  input_schema: { type: 'object', properties: { script: { type: 'string', description: 'A JS expression to evaluate, e.g. "document.title" or a querySelectorAll + map returning plain data.' } }, required: ['script'] }
 }
 
 // Tier 3: native desktop accessibility (already built + live-tested earlier).
-const CLICK_ELEMENT_TOOL: FunctionDeclaration = {
+const CLICK_ELEMENT_TOOL: Tool = {
   name: 'click_element',
   description: 'For native desktop apps (not websites): clicks something by its real OS accessibility name, trying real OCR automatically if that finds nothing.',
-  parametersJsonSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] }
+  input_schema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] }
 }
 
 // Tier 4: last resort — coordinate guessing / grid math for genuinely non-textual content.
-const CLICK_MOUSE_TOOL: FunctionDeclaration = {
+const CLICK_MOUSE_TOOL: Tool = {
   name: 'click_mouse',
   description: 'Clicks a raw pixel coordinate. Last resort only.',
-  parametersJsonSchema: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, speed: SPEED_SCHEMA }, required: ['x', 'y'] }
+  input_schema: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, speed: SPEED_SCHEMA }, required: ['x', 'y'] }
 }
-const DRAG_MOUSE_TOOL: FunctionDeclaration = {
+const DRAG_MOUSE_TOOL: Tool = {
   name: 'drag_mouse',
   description: 'A real press-move-release drag — for anything that needs an actual drag gesture, not two clicks (a chess piece on a canvas-rendered/non-web board, a slider).',
-  parametersJsonSchema: {
+  input_schema: {
     type: 'object',
     properties: { fromX: { type: 'number' }, fromY: { type: 'number' }, toX: { type: 'number' }, toY: { type: 'number' }, speed: SPEED_SCHEMA },
     required: ['fromX', 'fromY', 'toX', 'toY']
   }
 }
-const TYPE_TEXT_TOOL: FunctionDeclaration = {
+const TYPE_TEXT_TOOL: Tool = {
   name: 'type_text',
   description: 'Types literal text at the current OS-level focus. Only for non-browser content — use browser_type for websites.',
-  parametersJsonSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] }
+  input_schema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] }
 }
-const PRESS_KEY_TOOL: FunctionDeclaration = {
+const PRESS_KEY_TOOL: Tool = {
   name: 'press_key',
   description: 'Presses a single OS-level key.',
-  parametersJsonSchema: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] }
+  input_schema: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] }
 }
-const DEFINE_GRID_TOOL: FunctionDeclaration = {
+const DEFINE_GRID_TOOL: Tool = {
   name: 'define_grid',
   description: "Registers a non-web grid/board's pixel boundary once so click_grid_cell can click exact cells afterward instead of guessing each one.",
-  parametersJsonSchema: {
+  input_schema: {
     type: 'object',
     properties: { label: { type: 'string' }, x: { type: 'number' }, y: { type: 'number' }, width: { type: 'number' }, height: { type: 'number' }, rows: { type: 'number' }, cols: { type: 'number' } },
     required: ['label', 'x', 'y', 'width', 'height', 'rows', 'cols']
   }
 }
-const CLICK_GRID_CELL_TOOL: FunctionDeclaration = {
+const CLICK_GRID_CELL_TOOL: Tool = {
   name: 'click_grid_cell',
   description: 'Clicks one exact cell of a previously-defined non-web grid by row/col (0-indexed from top-left as currently visible).',
-  parametersJsonSchema: { type: 'object', properties: { label: { type: 'string' }, row: { type: 'number' }, col: { type: 'number' } }, required: ['label', 'row', 'col'] }
+  input_schema: { type: 'object', properties: { label: { type: 'string' }, row: { type: 'number' }, col: { type: 'number' } }, required: ['label', 'row', 'col'] }
 }
 
 // Control flow — the only two signals with no natural physical-action equivalent.
-const FINISH_CYCLE_TOOL: FunctionDeclaration = {
+const FINISH_CYCLE_TOOL: Tool = {
   name: 'finish_cycle',
   description:
     'Call when there is nothing further to do RIGHT NOW (e.g. just sent a message, waiting on a reply). Ends this check only; the next automatic check runs in ~20s. Never call mid-sequence.',
-  parametersJsonSchema: { type: 'object', properties: { narration: { type: 'string' } }, required: ['narration'] }
+  input_schema: { type: 'object', properties: { narration: { type: 'string' } }, required: ['narration'] }
 }
-const MARK_TASK_COMPLETE_TOOL: FunctionDeclaration = {
+const MARK_TASK_COMPLETE_TOOL: Tool = {
   name: 'mark_task_complete',
   description: 'Call once the ENTIRE goal is fully accomplished — stops the background task completely.',
-  parametersJsonSchema: { type: 'object', properties: { narration: { type: 'string' } }, required: ['narration'] }
+  input_schema: { type: 'object', properties: { narration: { type: 'string' } }, required: ['narration'] }
 }
 
-const ALL_TOOLS: FunctionDeclaration[] = [
+const ALL_TOOLS: Tool[] = [
   BROWSER_OPEN_TOOL,
   BROWSER_CLICK_TOOL,
   BROWSER_TYPE_TOOL,
@@ -294,12 +286,12 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
  * happened instead of assuming.
  */
 async function tick(goal: string): Promise<void> {
-  const apiKey = settingsStore.getGeminiApiKey()
+  const apiKey = settingsStore.getAnthropicApiKey()
   if (!apiKey) {
-    stopAutonomousTask('no Gemini API key configured')
+    stopAutonomousTask('no Claude API key configured')
     return
   }
-  const ai = new GoogleGenAI({ apiKey })
+  const anthropic = new Anthropic({ apiKey })
 
   const systemText = `You are DALVE, running a background task the user explicitly asked you to handle without them present: "${goal}". You have standing permission to act without asking for confirmation each time — but be conservative: never enter passwords/payment details/other credentials.
 
@@ -312,65 +304,85 @@ You can take SEVERAL actions in a row right now before this check ends — finis
 
 Recent history of this task:\n${history.length > 0 ? history.join('\n') : '(nothing yet)'}`
 
+  // Ground truth for "did anything change" must not depend on the model remembering to ask for
+  // it — a flash-tier model reliably forgot to call browser_read_text on its own, so it kept
+  // seeing a visually-unchanged screenshot and calling finish_cycle forever (the real cause of
+  // "waits for the user to say answer"). Fetching it unconditionally here removes that failure
+  // mode structurally instead of hoping the model's judgement improves.
+  const browserText = (await browserControl.isOpen()) ? await browserControl.getVisibleText().catch(() => null) : null
+  const browserNote = browserText
+    ? `\n\nCurrent real text of the open browser page (ground truth — check this for anything you might be waiting on, like a reply, before assuming nothing changed):\n${browserText}`
+    : ''
+
   const firstShot = await screenControl.captureScreenshotOnce(80)
   if (!firstShot) return
 
-  const contents: Content[] = [createUserContent([{ text: systemText }, createPartFromBase64(firstShot, 'image/jpeg')])]
+  const messages: MessageParam[] = [
+    {
+      role: 'user',
+      content: [
+        { type: 'text', text: systemText + browserNote },
+        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: firstShot } }
+      ]
+    }
+  ]
 
   for (let round = 0; round < MAX_ROUNDS_PER_TICK; round++) {
     log.info(`[autonomousTask] round ${round}: calling ${POLL_MODEL}`)
     let response
     try {
-      response = await ai.models.generateContent({
+      response = await anthropic.messages.create({
         model: POLL_MODEL,
-        contents,
-        config: { tools: [{ functionDeclarations: ALL_TOOLS }] }
+        max_tokens: MAX_OUTPUT_TOKENS,
+        tools: ALL_TOOLS,
+        messages
       })
     } catch (err) {
-      log.error('[autonomousTask] generateContent threw:', err instanceof Error ? err.stack : err)
+      log.error('[autonomousTask] messages.create threw:', err instanceof Error ? err.stack : err)
       throw err
     }
 
-    const calls = response.functionCalls
+    const toolUses = response.content.filter((b) => b.type === 'tool_use')
+    const textBlocks = response.content.filter((b) => b.type === 'text')
     log.info(
-      `[autonomousTask] round ${round} response: functionCalls=${calls ? calls.length : 0}` +
-        (calls?.length ? ` names=[${calls.map((c) => c.name).join(', ')}]` : '') +
-        (response.text ? ` text="${response.text.slice(0, 300)}"` : '')
+      `[autonomousTask] round ${round} response: toolUses=${toolUses.length}` +
+        (toolUses.length ? ` names=[${toolUses.map((c) => c.name).join(', ')}]` : '') +
+        (textBlocks.length ? ` text="${textBlocks.map((t) => t.text).join(' ').slice(0, 300)}"` : '')
     )
 
-    if (!calls || calls.length === 0) {
-      if (response.text) pushHistory(response.text.trim())
+    if (toolUses.length === 0) {
+      const text = textBlocks.map((t) => t.text).join(' ').trim()
+      if (text) pushHistory(text)
       return
     }
 
-    contents.push(createModelContent(calls.map((c) => createPartFromFunctionCall(c.name ?? '', c.args ?? {}))))
+    messages.push({ role: 'assistant', content: response.content })
 
     let shouldEndCycle = false
     let shouldEndTask = false
-    const responseParts: Part[] = []
-    for (const call of calls) {
-      const callName = call.name ?? ''
-      const callArgs = (call.args ?? {}) as Record<string, unknown>
+    const toolResults: ToolResultBlockParam[] = []
+    for (const call of toolUses) {
+      const callArgs = (call.input ?? {}) as Record<string, unknown>
 
-      if (callName === 'finish_cycle' || callName === 'mark_task_complete') {
-        pushHistory(String(callArgs.narration ?? callName))
-        if (callName === 'mark_task_complete') shouldEndTask = true
+      if (call.name === 'finish_cycle' || call.name === 'mark_task_complete') {
+        pushHistory(String(callArgs.narration ?? call.name))
+        if (call.name === 'mark_task_complete') shouldEndTask = true
         shouldEndCycle = true
-        responseParts.push(createPartFromFunctionResponse(call.id ?? callName, callName, { result: 'acknowledged' }))
+        toolResults.push({ type: 'tool_result', tool_use_id: call.id, content: 'acknowledged' })
         continue
       }
 
-      log.info(`[autonomousTask] executing ${callName} args=${JSON.stringify(callArgs)}`)
+      log.info(`[autonomousTask] executing ${call.name} args=${JSON.stringify(callArgs)}`)
       let result: Record<string, unknown>
       try {
-        result = await executeTool(callName, callArgs)
+        result = await executeTool(call.name, callArgs)
       } catch (err) {
         result = { error: err instanceof Error ? err.message : String(err) }
-        log.error(`[autonomousTask] ${callName} threw:`, err)
+        log.error(`[autonomousTask] ${call.name} threw:`, err)
       }
-      log.info(`[autonomousTask] ${callName} result=${JSON.stringify(result).slice(0, 500)}`)
-      pushHistory(`${callName}(${JSON.stringify(callArgs).slice(0, 200)}) -> ${JSON.stringify(result).slice(0, 300)}`)
-      responseParts.push(createPartFromFunctionResponse(call.id ?? callName, callName, result))
+      log.info(`[autonomousTask] ${call.name} result=${JSON.stringify(result).slice(0, 500)}`)
+      pushHistory(`${call.name}(${JSON.stringify(callArgs).slice(0, 200)}) -> ${JSON.stringify(result).slice(0, 300)}`)
+      toolResults.push({ type: 'tool_result', tool_use_id: call.id, content: JSON.stringify(result).slice(0, 4000) })
     }
 
     if (shouldEndTask) {
@@ -380,7 +392,9 @@ Recent history of this task:\n${history.length > 0 ? history.join('\n') : '(noth
     if (shouldEndCycle) return
 
     const nextShot = await screenControl.captureScreenshotOnce(80)
-    contents.push(createUserContent(nextShot ? [...responseParts, createPartFromBase64(nextShot, 'image/jpeg')] : responseParts))
+    const nextContent: ContentBlockParam[] = [...toolResults]
+    if (nextShot) nextContent.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: nextShot } })
+    messages.push({ role: 'user', content: nextContent })
   }
 
   pushHistory('Hit the per-check action limit — pausing until the next automatic check.')

@@ -11,6 +11,7 @@ export function attachWindow(window: BrowserWindow): void {
 
 interface StoredSecrets {
   geminiApiKey?: string // base64-encoded, safeStorage-encrypted
+  anthropicApiKey?: string // base64-encoded, safeStorage-encrypted
   composioApiKey?: string // base64-encoded, safeStorage-encrypted
   composioConnections: ComposioConnection[]
   composioAuthConfigIds: Record<string, string> // appKey -> Composio auth config id, created once and reused
@@ -61,6 +62,7 @@ export interface SyncableSettings {
   dalveVoice: string
   dalveMemory: string
   geminiApiKey?: string
+  anthropicApiKey?: string
   composioApiKey?: string
 }
 
@@ -100,6 +102,7 @@ class SettingsStore {
       this.data.dalveVoice = remote.dalveVoice
       this.data.dalveMemory = remote.dalveMemory
       if (remote.geminiApiKey) this.data.geminiApiKey = encrypt(remote.geminiApiKey)
+      if (remote.anthropicApiKey) this.data.anthropicApiKey = encrypt(remote.anthropicApiKey)
       if (remote.composioApiKey) this.data.composioApiKey = encrypt(remote.composioApiKey)
       this.persist()
       this.notifyRenderer()
@@ -128,6 +131,7 @@ class SettingsStore {
   getState(): SettingsState {
     return {
       geminiApiKeySet: !!this.data.geminiApiKey,
+      anthropicApiKeySet: !!this.data.anthropicApiKey,
       composioApiKeySet: !!this.data.composioApiKey,
       composioConnections: this.data.composioConnections,
       mcpServers: this.data.mcpServers.map((s) => ({ ...s, authToken: s.authToken ? '••••••••' : undefined })),
@@ -181,6 +185,12 @@ class SettingsStore {
     this.notifyChange()
   }
 
+  setAnthropicApiKey(key: string): void {
+    this.data.anthropicApiKey = key ? encrypt(key) : undefined
+    this.persist()
+    this.notifyChange()
+  }
+
   setComposioApiKey(key: string): void {
     this.data.composioApiKey = key ? encrypt(key) : undefined
     this.persist()
@@ -190,6 +200,11 @@ class SettingsStore {
   /** Main-process-only accessor. Never exposed to the renderer over IPC. */
   getGeminiApiKey(): string | undefined {
     return this.data.geminiApiKey ? decrypt(this.data.geminiApiKey) : undefined
+  }
+
+  /** Main-process-only accessor. Never exposed to the renderer over IPC. */
+  getAnthropicApiKey(): string | undefined {
+    return this.data.anthropicApiKey ? decrypt(this.data.anthropicApiKey) : undefined
   }
 
   /** Main-process-only accessor. Never exposed to the renderer over IPC. */

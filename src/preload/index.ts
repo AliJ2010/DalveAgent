@@ -19,6 +19,8 @@ const dalveApi = {
     get: (): Promise<SettingsState> => ipcRenderer.invoke('settings:get'),
     setGeminiKey: (key: string): Promise<SettingsState> =>
       ipcRenderer.invoke('settings:setGeminiKey', key),
+    setAnthropicKey: (key: string): Promise<SettingsState> =>
+      ipcRenderer.invoke('settings:setAnthropicKey', key),
     setComposioKey: (key: string): Promise<SettingsState> =>
       ipcRenderer.invoke('settings:setComposioKey', key),
     setDalveVoice: (voice: string): Promise<SettingsState> =>
@@ -51,8 +53,11 @@ const dalveApi = {
       ipcRenderer.invoke('settings:removeMcpServer', id),
     /** Manual device-to-device key transfer — call from DevTools console on the device that HAS
      *  the key, then paste the values into the Settings screen on the device that doesn't. */
-    getRawKeys: (): Promise<{ geminiApiKey: string | null; composioApiKey: string | null }> =>
-      ipcRenderer.invoke('settings:getRawKeys'),
+    getRawKeys: (): Promise<{
+      geminiApiKey: string | null
+      anthropicApiKey: string | null
+      composioApiKey: string | null
+    }> => ipcRenderer.invoke('settings:getRawKeys'),
     /** Fires whenever settings change for ANY reason, including a remote update arriving via
      *  cloud sync from another device — that's what makes cross-device sync show up live. */
     onChanged: (callback: () => void): (() => void) => {
