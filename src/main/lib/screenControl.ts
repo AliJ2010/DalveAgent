@@ -34,15 +34,21 @@ function emit(event: ScreenControlEvent): void {
 let shareTimer: ReturnType<typeof setInterval> | null = null
 let onFrame: ((base64Jpeg: string) => void) | null = null
 
-/** Approved at least once for the current control session — gates all physical-input tools. */
-let controlGranted = false
+// Two INDEPENDENT grants, not one shared flag. They used to be a single `controlGranted`
+// boolean that both the live voice session and the autonomous task runner set/cleared — which
+// meant either one ending (geminiLive's stopAll() on session close/error, completely unrelated to
+// whatever the autonomous task was doing) silently revoked the OTHER subsystem's authorization
+// mid-run. Confirmed live: an autonomous WhatsApp task started getting "Not authorized to act
+// yet" on click_mouse mid-task with no user action to explain it — root cause was exactly this.
+let liveControlGranted = false
+let autonomousControlGranted = false
 
 export function isSharing(): boolean {
   return shareTimer !== null
 }
 
 export function isControlGranted(): boolean {
-  return controlGranted
+  return liveControlGranted || autonomousControlGranted
 }
 
 // Locked to the primary monitor only — multi-monitor targeting (list_monitors/switch_monitor)
@@ -110,24 +116,32 @@ export function stopScreenShare(): void {
   emit({ type: 'active', active: false })
 }
 
-/** Revokes standing control and stops sharing — the global "Stop" kill-switch. */
+/** Revokes the LIVE session's standing control and stops sharing — the live session's own "Stop"
+ *  kill-switch. Deliberately does not touch autonomousControlGranted — an unrelated background
+ *  task's authorization must survive the live voice session ending. */
 export function stopAll(): void {
   stopScreenShare()
-  controlGranted = false
+  liveControlGranted = false
 }
 
 /**
- * Grants or revokes standing authorization for click/type/key. Set true as soon as screen
- * sharing starts (the user's already on notice that DALVE can see and act — no separate
- * per-action confirmation), and by the autonomous task runner for its own up-front,
- * per-task "run this without asking me each time" consent (see autonomousTask.ts).
+ * Grants or revokes the LIVE voice session's standing authorization for click/type/key. Set true
+ * as soon as screen sharing starts (the user's already on notice that DALVE can see and act — no
+ * separate per-action confirmation).
  */
 export function setControlGranted(granted: boolean): void {
-  controlGranted = granted
+  liveControlGranted = granted
+}
+
+/** Grants or revokes the autonomous task runner's own, independent standing authorization — see
+ *  autonomousTask.ts. Kept separate from setControlGranted so starting/stopping one doesn't
+ *  silently strip the other's permission. */
+export function setAutonomousControlGranted(granted: boolean): void {
+  autonomousControlGranted = granted
 }
 
 function requireControl(): void {
-  if (!controlGranted) {
+  if (!liveControlGranted && !autonomousControlGranted) {
     throw new Error('Not authorized to act yet — call start_screen_share before taking any physical action.')
   }
 }

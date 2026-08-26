@@ -32,12 +32,12 @@ function emit(event: AutonomousTaskEvent): void {
   win?.webContents.send('autonomousTask:event', event)
 }
 
-let timer: ReturnType<typeof setInterval> | null = null
+let timer: ReturnType<typeof setTimeout> | null = null
 let currentGoal: string | null = null
 let history: string[] = []
 
 export function isActive(): boolean {
-  return timer !== null
+  return currentGoal !== null
 }
 
 export function getGoal(): string | null {
@@ -170,15 +170,25 @@ const ALL_TOOLS: Tool[] = [
  * gate, which this deliberately bypasses via screenControl.setControlGranted).
  */
 export function startAutonomousTask(goal: string): void {
-  if (timer) stopAutonomousTask('replaced by a new task')
+  if (isActive()) stopAutonomousTask('replaced by a new task')
   currentGoal = goal
   history = []
   gridTargeting.clearGrids()
-  screenControl.setControlGranted(true)
+  screenControl.setAutonomousControlGranted(true)
   emit({ type: 'started', goal })
   log.info(`[autonomousTask] started, goal="${goal}", log file: ${log.transports.file.getFile().path}`)
 
+  // A self-rescheduling timeout, not setInterval: a real tick (a Claude call plus several tool
+  // rounds, each of which can itself retry) routinely runs longer than CHECK_INTERVAL_MS.
+  // setInterval doesn't care and fires the next tick anyway, so two ticks end up running
+  // concurrently — confirmed live: interleaved "round 0"/"round 3" log lines from two overlapping
+  // ticks, each independently deciding to reply to the same incoming message, which is exactly
+  // how a real duplicate WhatsApp send happened. Only ever schedule the next tick after the
+  // current one has fully finished. `currentGoal` (not `timer`) is the source of truth for
+  // "should this still be running" — it's what stopAutonomousTask actually clears, including when
+  // tick() itself calls stopAutonomousTask (task completed / no API key) mid-cycle.
   const runCycle = async (): Promise<void> => {
+    if (currentGoal === null) return // stopped while this tick was queued
     try {
       await tick(goal)
     } catch (err) {
@@ -189,20 +199,20 @@ export function startAutonomousTask(goal: string): void {
         text: `Hit an error and will retry next cycle: ${err instanceof Error ? err.message : String(err)}`
       })
     }
+    if (currentGoal !== null) timer = setTimeout(() => void runCycle(), CHECK_INTERVAL_MS)
   }
 
   void runCycle()
-  timer = setInterval(() => void runCycle(), CHECK_INTERVAL_MS)
 }
 
 export function stopAutonomousTask(reason = 'stopped by user'): void {
   if (timer) {
-    clearInterval(timer)
+    clearTimeout(timer)
     timer = null
   }
   if (currentGoal) emit({ type: 'stopped', reason })
   currentGoal = null
-  screenControl.setControlGranted(false)
+  screenControl.setAutonomousControlGranted(false)
 }
 
 function pushHistory(narration: string): void {

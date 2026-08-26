@@ -1,7 +1,25 @@
 import { app } from 'electron'
 import { join } from 'path'
 import { existsSync } from 'fs'
-import { chromium, type BrowserContext, type Page, type Locator } from 'playwright'
+import type { BrowserContext, Page, Locator } from 'playwright'
+
+type ChromiumType = typeof import('playwright')['chromium']
+
+// `chromium` itself is NOT imported as a normal value import — Playwright computes its browsers-
+// install directory from PLAYWRIGHT_BROWSERS_PATH exactly once, at module-evaluation time, the
+// instant `playwright` is first required. A static `import ... from 'playwright'` at the top of
+// this file gets hoisted ahead of everything else in this module (ES module semantics: imported
+// modules fully evaluate before the importing module's own body runs) — so by the time
+// ensurePage() below set the env var, Playwright had already locked in the WRONG (default global
+// cache) directory. Confirmed live: a packaged build with the correct browser bundled at
+// resourcesPath/playwright-browsers still had every browser_* tool fail with "Executable doesn't
+// exist at ...\AppData\Local\ms-playwright\...". Fix: require() it lazily, after the env var is
+// set, so Playwright's one-time path computation sees the right value.
+let chromiumModule: ChromiumType | null = null
+function getChromium(): ChromiumType {
+  if (!chromiumModule) chromiumModule = (require('playwright') as { chromium: ChromiumType }).chromium
+  return chromiumModule
+}
 
 /**
  * Real DOM-level browser control — Tier 2 of the control hierarchy (API > DOM > OS accessibility
@@ -52,7 +70,7 @@ async function ensurePage(): Promise<Page> {
   launching = (async () => {
     const browsersPath = resolveBrowsersPath()
     if (browsersPath) process.env.PLAYWRIGHT_BROWSERS_PATH = browsersPath
-    context = await chromium.launchPersistentContext(profileDir(), {
+    context = await getChromium().launchPersistentContext(profileDir(), {
       headless: false,
       viewport: { width: 1280, height: 800 }
     })
