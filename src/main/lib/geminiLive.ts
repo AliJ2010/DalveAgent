@@ -15,6 +15,7 @@ import * as screenControl from './screenControl'
 import * as autonomousTask from './autonomousTask'
 import * as appControl from './appControl'
 import * as windowLayout from './windowLayout'
+import * as priceAxis from './priceAxis'
 import * as uiAutomation from './uiAutomation'
 import * as ocr from './ocr'
 import * as gridTargeting from './gridTargeting'
@@ -50,6 +51,8 @@ Screen sharing only ever watches the user's main/primary monitor — if somethin
 Real targeting priority, strongest to weakest — always prefer the strongest one that applies: (1) A direct integration tool (Composio/MCP) if one exists for what's being asked — check before touching any UI at all. (2) browser_open + browser_click/browser_type/browser_read_text for ANYTHING that's a website — WhatsApp Web, any web app. This is real DOM lookup by actual text/label, running in DALVE's own dedicated automation browser; it cannot ever accidentally click the browser's own toolbar/tabs/profile button, because that browser has none visible and the tool has no way to address them even if it did — confirmed root cause of a real repeated mistake (clicking Chrome's own account button because it happened to share a name with the real target) that this structurally can't reproduce. (3) click_element for native desktop apps with a visible label — reads the OS accessibility tree, falls back to OCR internally, no need to chain tools yourself. (4) click_mouse/move_mouse from the video feed — last resort, for genuinely non-textual, non-web content only (a game, a drawing canvas, a map). If click_element ever errors outright on macOS, the most likely cause is DALVE not yet having Accessibility permission granted in System Settings — say so plainly.
 
 For grid/board content specifically — chess/checkers boards, sudoku, spreadsheets, calendars, minesweeper, anything laid out as uniform rows/columns — go straight to define_grid + click_grid_cell rather than trying click_element or click_text first. Confirmed via real testing: a chess board's squares and pieces are pure graphics with zero accessible name and zero readable text, so those tools will just fail there every time and waste a step. Call define_grid ONCE per game/session with your best visual estimate of the whole grid's outer boundary (a big, forgiving target), then click_grid_cell for every individual move after that — it computes the exact position mathematically instead of you re-guessing a small target from scratch each time. If a click still lands wrong, call define_grid again with a corrected boundary rather than continuing to guess with the same one. Many drag-to-move interfaces (chess/checkers pieces especially) don't respond to two separate clicks at all — if a piece doesn't visibly move after clicking its square then the destination, that's the signal to try drag_mouse (piece's cell center to destination cell center) instead of repeating the same click sequence. Genuinely non-textual, non-grid content with no label at all (a drawing canvas, a map, a free-form game) is the actual last resort for click_mouse/move_mouse.
+
+For anything involving an EXACT PRICE on a trading chart (TradingView etc.) — placing a stop/limit order at a specific price, setting a take-profit or stop-loss level, right-clicking at a price to bring up an order menu — always use click_price_level, never click_mouse. A trading chart's price scale is not something you can read a pixel position from by eye; confirmed via a real failed trade that guessing a coordinate for "$20 below entry" landed the order at the wrong price entirely. click_price_level reads the chart's own price scale and calibrates the exact pixel for you — you only ever need to give it the actual price number.
 
 Clicking the wrong thing (e.g. the wrong contact in a chat list, the wrong item in a similar-looking row) is the single most common way you fail at this — the video feed is compressed and small text is easy to misread, so never click from a single glance when you're relying on pixel coordinates. Before a coordinate-based click where similar-looking rows could be confused, quickly move_mouse there first — that's free — and confirm in the next frame that the cursor actually landed on the right element before you click_mouse; skip this check when using click_element (it's already precise) or when the target is obvious and unambiguous. If a click turns out to have hit the wrong thing, say so immediately and correct it rather than continuing as if it worked. When a task spans multiple turns (e.g. "keep this conversation going without me"), re-check the screen state at the start of each new step rather than assuming it still matches what you last saw — things move, replies arrive, windows change focus.
 
@@ -229,6 +232,21 @@ const DRAG_MOUSE_TOOL: FunctionDeclaration = {
       speed: SPEED_PARAM_SCHEMA
     },
     required: ['fromX', 'fromY', 'toX', 'toY']
+  }
+}
+
+const CLICK_PRICE_LEVEL_TOOL: FunctionDeclaration = {
+  name: 'click_price_level',
+  description:
+    "Clicks or right-clicks at an EXACT price on a financial trading chart (TradingView etc.) — reads the chart's own right-side price scale via OCR and mathematically calibrates price-to-pixel, instead of guessing a coordinate from the screenshot. ALWAYS use this instead of click_mouse for anything involving a specific price (placing a stop order at a price, setting a take-profit/stop-loss level) — a guessed coordinate has repeatedly landed at the wrong price. Requires the chart's price scale to be visible on screen with at least 2 readable price labels.",
+  parametersJsonSchema: {
+    type: 'object',
+    properties: {
+      price: { type: 'number', description: 'The exact price to click at, e.g. 29562.00' },
+      button: { type: 'string', enum: ['left', 'right'], description: 'Defaults to left. Use right for a context menu (e.g. to place a stop order).' },
+      x: { type: 'number', description: 'Optional X pixel coordinate within the chart body. Defaults to a safe position left of the price scale.' }
+    },
+    required: ['price']
   }
 }
 
@@ -523,6 +541,7 @@ async function buildToolsForAgent(agent: AgentConfig | null): Promise<Tool[]> {
     MOVE_MOUSE_TOOL,
     CLICK_MOUSE_TOOL,
     DRAG_MOUSE_TOOL,
+    CLICK_PRICE_LEVEL_TOOL,
     BROWSER_OPEN_TOOL,
     BROWSER_CLICK_TOOL,
     BROWSER_TYPE_TOOL,
@@ -939,6 +958,23 @@ async function handleToolCalls(functionCalls: FunctionCall[]): Promise<void> {
           (args.speed as 'instant' | 'visible') ?? 'visible'
         )
         response = { result: 'Dragged.' }
+      } else if (fc.name === 'click_price_level') {
+        const price = Number(args.price)
+        const located = await priceAxis.locatePriceY(price)
+        if (!located.found || located.y === undefined) {
+          response = { status: 'FAILED', error: located.error ?? `Could not locate price ${price} on screen.` }
+        } else {
+          const frame = screenControl.getFrameSize()
+          const targetX = args.x !== undefined ? Number(args.x) : Math.round(frame.width * 0.6)
+          await screenControl.clickMouse(
+            targetX,
+            located.y,
+            (args.button as 'left' | 'right') ?? 'left',
+            false,
+            'visible'
+          )
+          response = { status: 'SUCCESS', result: `Clicked at price ${price} (y=${located.y}, calibrated from ${located.samples} price labels).` }
+        }
       } else if (fc.name === 'browser_open') {
         const info = await browserControl.openUrl(String(args.url ?? ''))
         response = { result: `Opened. title="${info.title}" url=${info.url}` }
