@@ -107,7 +107,7 @@ const FULLSCREEN_WINDOW_TOOL: FunctionDeclaration = {
 const OPEN_TRADING_SETUP_TOOL: FunctionDeclaration = {
   name: 'open_trading_setup',
   description:
-    'Sets up the user\'s trading workspace across monitors: opens and maximizes the TradingView desktop app on the main monitor, and opens Discord (top half) and Tradovate (bottom half) as separate windows snapped to the secondary monitor. Call this when the user asks to open/start their trading setup, trading layout, or similar (e.g. "open trading setup", "set up my trading workspace"). Windows only.',
+    'Sets up the user\'s trading workspace across monitors: opens and maximizes the TradingView desktop app on the main monitor, and opens Discord (top 80%) and Tradovate (bottom 20%) as separate windows snapped to the secondary monitor. Call this when the user asks to open/start their trading setup, trading layout, or similar (e.g. "open trading setup", "set up my trading workspace"). Windows only.',
   parametersJsonSchema: { type: 'object', properties: {} }
 }
 
