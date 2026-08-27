@@ -14,6 +14,7 @@ import * as composio from './composio'
 import * as screenControl from './screenControl'
 import * as autonomousTask from './autonomousTask'
 import * as appControl from './appControl'
+import * as windowLayout from './windowLayout'
 import * as uiAutomation from './uiAutomation'
 import * as ocr from './ocr'
 import * as gridTargeting from './gridTargeting'
@@ -100,6 +101,13 @@ const FULLSCREEN_WINDOW_TOOL: FunctionDeclaration = {
   name: 'fullscreen_window',
   description:
     "Toggles native fullscreen/maximize on the CURRENT frontmost window. Call this after open_application/activate_application, not as a way to guess which window to target.",
+  parametersJsonSchema: { type: 'object', properties: {} }
+}
+
+const OPEN_TRADING_SETUP_TOOL: FunctionDeclaration = {
+  name: 'open_trading_setup',
+  description:
+    'Sets up the user\'s trading workspace across monitors: opens and maximizes the TradingView desktop app on the main monitor, and opens Discord (top half) and Tradovate (bottom half) as separate windows snapped to the secondary monitor. Call this when the user asks to open/start their trading setup, trading layout, or similar (e.g. "open trading setup", "set up my trading workspace"). Windows only.',
   parametersJsonSchema: { type: 'object', properties: {} }
 }
 
@@ -506,6 +514,7 @@ async function buildToolsForAgent(agent: AgentConfig | null): Promise<Tool[]> {
     OPEN_APPLICATION_TOOL,
     ACTIVATE_APPLICATION_TOOL,
     FULLSCREEN_WINDOW_TOOL,
+    OPEN_TRADING_SETUP_TOOL,
     LIST_AGENTS_TOOL,
     SWITCH_AGENT_TOOL,
     REMEMBER_FACT_TOOL,
@@ -851,6 +860,9 @@ async function handleToolCalls(functionCalls: FunctionCall[]): Promise<void> {
       } else if (fc.name === 'fullscreen_window') {
         const { result, message } = await appControl.fullscreenFrontmostWindow()
         response = { status: result, result: message }
+      } else if (fc.name === 'open_trading_setup') {
+        const { status, message } = await windowLayout.openTradingSetup()
+        response = { status, result: message }
       } else if (fc.name === 'create_agent') {
         const type = args.type === 'bot' ? 'bot' : 'companion'
         const agent = agentStore.create({

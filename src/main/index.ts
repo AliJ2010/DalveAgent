@@ -29,9 +29,6 @@ if (!gotSingleInstanceLock) {
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let isQuitting = false
-// Set by a --hidden arg on the login-item launch (see setLoginItemSettings below) so an
-// autostarted DALVE opens straight into the tray instead of popping a window at every boot.
-const startHidden = process.argv.includes('--hidden')
 
 app.on('before-quit', () => {
   isQuitting = true
@@ -112,7 +109,7 @@ function createWindow(): void {
   })
 
   mainWindow.on('ready-to-show', () => {
-    if (!startHidden) mainWindow?.show()
+    mainWindow?.show()
   })
 
   // Closing the window just hides it — DALVE keeps running in the tray so the global hotkey
@@ -179,10 +176,11 @@ if (gotSingleInstanceLock) {
     })
 
     // Only meaningful once DALVE is an installed exe, not `npm run dev` — a dev process has
-    // no stable path to re-launch itself from. `--hidden` tells the next auto-launched instance
-    // to skip popping a window and go straight to the tray.
+    // no stable path to re-launch itself from. Opens visibly on login (not just hidden to tray)
+    // per explicit request — the user wants DALVE actually on screen when the PC starts, not
+    // silently running in the background.
     if (app.isPackaged) {
-      app.setLoginItemSettings({ openAtLogin: true, args: ['--hidden'] })
+      app.setLoginItemSettings({ openAtLogin: true })
     }
 
     createWindow()
