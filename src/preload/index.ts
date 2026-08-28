@@ -21,6 +21,8 @@ const dalveApi = {
       ipcRenderer.invoke('settings:setGeminiKey', key),
     setAnthropicKey: (key: string): Promise<SettingsState> =>
       ipcRenderer.invoke('settings:setAnthropicKey', key),
+    setTelegramBotToken: (token: string): Promise<SettingsState> =>
+      ipcRenderer.invoke('settings:setTelegramBotToken', token),
     setComposioKey: (key: string): Promise<SettingsState> =>
       ipcRenderer.invoke('settings:setComposioKey', key),
     setDalveVoice: (voice: string): Promise<SettingsState> =>
@@ -127,6 +129,21 @@ const dalveApi = {
         callback(payload)
       ipcRenderer.on('autonomousTask:event', listener)
       return () => ipcRenderer.removeListener('autonomousTask:event', listener)
+    }
+  },
+  handTracking: {
+    stop: (): Promise<{ status: 'SUCCESS'; message: string }> => ipcRenderer.invoke('handTracking:stop'),
+    sendFrame: (x: number, y: number, pinching: boolean): void =>
+      ipcRenderer.send('handTracking:frame', x, y, pinching),
+    onStart: (callback: () => void): (() => void) => {
+      const listener = (): void => callback()
+      ipcRenderer.on('handTracking:start', listener)
+      return () => ipcRenderer.removeListener('handTracking:start', listener)
+    },
+    onStop: (callback: () => void): (() => void) => {
+      const listener = (): void => callback()
+      ipcRenderer.on('handTracking:stop', listener)
+      return () => ipcRenderer.removeListener('handTracking:stop', listener)
     }
   },
   cloud: {

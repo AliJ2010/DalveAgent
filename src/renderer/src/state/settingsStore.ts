@@ -7,6 +7,7 @@ interface SettingsStoreState {
   refresh: () => Promise<void>
   setGeminiKey: (key: string) => Promise<void>
   setAnthropicKey: (key: string) => Promise<void>
+  setTelegramBotToken: (token: string) => Promise<void>
   setComposioKey: (key: string) => Promise<void>
   setDalveVoice: (voice: string) => Promise<void>
   setDalveMemory: (memory: string) => Promise<void>
@@ -54,6 +55,11 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
 
   setAnthropicKey: async (key) => {
     const settings = await window.dalve.settings.setAnthropicKey(key)
+    set({ settings })
+  },
+
+  setTelegramBotToken: async (token) => {
+    const settings = await window.dalve.settings.setTelegramBotToken(token)
     set({ settings })
   },
 

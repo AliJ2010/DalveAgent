@@ -8,6 +8,7 @@ import { SettingsScreen } from './components/SettingsScreen'
 import { KnowledgeScreen } from './components/KnowledgeScreen'
 import { AgentsCanvas } from './components/AgentsCanvas'
 import { ScreenControlOverlay } from './components/ScreenControlOverlay'
+import { HandTrackingController } from './components/HandTrackingController'
 import { AutonomousTaskOverlay } from './components/AutonomousTaskOverlay'
 import { AuthScreen } from './components/AuthScreen'
 import { VersionPopup } from './components/VersionPopup'
@@ -83,6 +84,7 @@ function App(): React.JSX.Element {
   return (
     <div style={{ display: 'flex', position: 'fixed', inset: 0, background: 'var(--c-void)' }}>
       <VersionPopup />
+      <HandTrackingController />
       <ScreenControlOverlay />
       <AutonomousTaskOverlay />
       <Sidebar />

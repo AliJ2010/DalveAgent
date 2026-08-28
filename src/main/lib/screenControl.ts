@@ -34,21 +34,25 @@ function emit(event: ScreenControlEvent): void {
 let shareTimer: ReturnType<typeof setInterval> | null = null
 let onFrame: ((base64Jpeg: string) => void) | null = null
 
-// Two INDEPENDENT grants, not one shared flag. They used to be a single `controlGranted`
+// THREE independent grants, not one shared flag. They used to be a single `controlGranted`
 // boolean that both the live voice session and the autonomous task runner set/cleared — which
 // meant either one ending (geminiLive's stopAll() on session close/error, completely unrelated to
 // whatever the autonomous task was doing) silently revoked the OTHER subsystem's authorization
 // mid-run. Confirmed live: an autonomous WhatsApp task started getting "Not authorized to act
 // yet" on click_mouse mid-task with no user action to explain it — root cause was exactly this.
+// remoteControlGranted is the same idea for telegramBridge.ts's one-shot remote commands — kept
+// separate so a Telegram command finishing (and revoking its own grant) can never strip
+// permission out from under a concurrently-running autonomous task, or vice versa.
 let liveControlGranted = false
 let autonomousControlGranted = false
+let remoteControlGranted = false
 
 export function isSharing(): boolean {
   return shareTimer !== null
 }
 
 export function isControlGranted(): boolean {
-  return liveControlGranted || autonomousControlGranted
+  return liveControlGranted || autonomousControlGranted || remoteControlGranted
 }
 
 // Locked to the primary monitor only — multi-monitor targeting (list_monitors/switch_monitor)
@@ -140,8 +144,15 @@ export function setAutonomousControlGranted(granted: boolean): void {
   autonomousControlGranted = granted
 }
 
+/** Grants or revokes a Telegram remote command's own, independent standing authorization — see
+ *  telegramBridge.ts. Kept separate so one running command finishing doesn't strip permission
+ *  from a concurrently-running autonomous task or live session, or vice versa. */
+export function setRemoteControlGranted(granted: boolean): void {
+  remoteControlGranted = granted
+}
+
 function requireControl(): void {
-  if (!liveControlGranted && !autonomousControlGranted) {
+  if (!liveControlGranted && !autonomousControlGranted && !remoteControlGranted) {
     throw new Error('Not authorized to act yet — call start_screen_share before taking any physical action.')
   }
 }
@@ -233,6 +244,24 @@ export async function moveMouse(x: number, y: number, mode: MoveMode = 'visible'
   } else {
     await animateTo(p.x, p.y)
   }
+}
+
+/**
+ * Direct, ungated, un-eased cursor set in GLOBAL desktop coordinates (not the captured-frame
+ * space toGlobalCoords converts from) — used by handTracking.ts, where the user's own physical
+ * hand is the actual input device, not an AI-chosen action. Deliberately skips requireControl()
+ * for the same reason installing a different physical mouse wouldn't need AI permission, and
+ * skips the eased animation since the hand-tracking layer already paces/smooths every frame
+ * itself — adding another smoothing pass on top would just add lag.
+ */
+export function setCursorPositionAbsolute(x: number, y: number): void {
+  getRobot().moveMouse(Math.round(x), Math.round(y))
+}
+
+/** Same "the human is the actual actor" reasoning as setCursorPositionAbsolute — a pinch gesture
+ *  is the user's own physical click, not an AI decision, so this isn't gated either. */
+export function clickAtCurrentPosition(): void {
+  getRobot().mouseClick('left')
 }
 
 export async function clickMouse(

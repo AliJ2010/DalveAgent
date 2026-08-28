@@ -8,7 +8,9 @@ import { attachWindow as attachScreenControlWindow, stopAll as stopScreenControl
 import { attachWindow as attachAutonomousTaskWindow, stopAutonomousTask } from './lib/autonomousTask'
 import { attachWindow as attachAgentStoreWindow } from './lib/agentStore'
 import { attachWindow as attachSettingsStoreWindow } from './lib/settingsStore'
+import { attachWindow as attachHandTrackingWindow, stop as stopHandTracking } from './lib/handTracking'
 import { initAutoUpdate } from './lib/autoUpdate'
+import { initTelegramBridge } from './lib/telegramBridge'
 
 // Belt-and-suspenders alongside the lazy singletons in settingsStore/agentStore: pin the app
 // name explicitly so userData resolves to the same %APPDATA%\dalve folder in dev and packaged
@@ -125,6 +127,7 @@ function createWindow(): void {
   mainWindow.on('closed', () => {
     stopVoiceSession()
     stopScreenControl()
+    stopHandTracking()
     mainWindow = null
   })
 
@@ -133,6 +136,7 @@ function createWindow(): void {
   attachAutonomousTaskWindow(mainWindow)
   attachAgentStoreWindow(mainWindow)
   attachSettingsStoreWindow(mainWindow)
+  attachHandTrackingWindow(mainWindow)
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
@@ -186,6 +190,7 @@ if (gotSingleInstanceLock) {
     createWindow()
     createTray()
     initAutoUpdate()
+    initTelegramBridge()
 
     // Voice wake-word ("Hey DALVE") was tried via two different offline engines and dropped —
     // neither reliably recognized the phrase. This hotkey is the replacement: free, instant,

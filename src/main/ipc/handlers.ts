@@ -7,6 +7,7 @@ import * as composio from '../lib/composio'
 import * as screenControl from '../lib/screenControl'
 import * as autonomousTask from '../lib/autonomousTask'
 import * as cloudSync from '../lib/cloudSync'
+import * as handTracking from '../lib/handTracking'
 import type { AgentConfig } from '@shared/types'
 
 export function registerIpcHandlers(): void {
@@ -26,6 +27,11 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('settings:setAnthropicKey', (_e, key: string) => {
     settingsStore.setAnthropicApiKey(key)
+    return settingsStore.getState()
+  })
+
+  ipcMain.handle('settings:setTelegramBotToken', (_e, token: string) => {
+    settingsStore.setTelegramBotToken(token)
     return settingsStore.getState()
   })
 
@@ -208,6 +214,14 @@ export function registerIpcHandlers(): void {
   // The global kill-switch: revokes standing permission and stops sharing immediately,
   // regardless of what DALVE is mid-way through doing.
   ipcMain.handle('screenControl:stop', () => screenControl.stopAll())
+
+  // --- Hand tracking ---
+  ipcMain.handle('handTracking:stop', () => handTracking.stop())
+  // High-frequency (per-frame) — ipcMain.on, not handle, since there's nothing to await or
+  // return per frame and a round-trip Promise per frame would just add latency to the cursor.
+  ipcMain.on('handTracking:frame', (_e, x: number, y: number, pinching: boolean) => {
+    handTracking.onFrame(x, y, pinching)
+  })
 
   // --- Autonomous task ---
   ipcMain.handle('autonomousTask:stop', () => autonomousTask.stopAutonomousTask('stopped by user'))

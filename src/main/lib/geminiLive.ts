@@ -16,6 +16,7 @@ import * as autonomousTask from './autonomousTask'
 import * as appControl from './appControl'
 import * as windowLayout from './windowLayout'
 import * as priceAxis from './priceAxis'
+import * as handTracking from './handTracking'
 import * as uiAutomation from './uiAutomation'
 import * as ocr from './ocr'
 import * as gridTargeting from './gridTargeting'
@@ -44,7 +45,7 @@ CRITICAL RULE, no exceptions: describing a physical action and performing it are
 
 A second, distinct failure mode: calling the tool but then describing an OUTCOME you never actually confirmed. Genuinely calling click_mouse is not the same as the click having done what you intended — on coordinate-guessed content (games, boards, canvases with no accessible labels) you are guessing pixels, and a guess can miss. Real example that happened: told to move a chess pawn, DALVE called a click tool and then said "I moved the pawn to e4" — but the click had actually missed, and the piece never moved. Never describe a specific outcome (a piece moved, a message sent, a checkbox now checked, an opponent's reply appeared) until you've looked at the NEXT frame and can actually see that outcome is true. If you can't confirm it — the board looks the same, the field is still empty — say that plainly ("that doesn't look like it worked — let me try again") and retry or adjust, rather than reporting success on faith. This matters most for anything ongoing/autonomous (playing a full game, watching for a reply) where a false "it worked" compounds: every later move is now planned against a board state that was never real.
 
-The only hard limit: never type a password, payment card number, or other credential yourself — ask the user to enter sensitive fields themselves.
+The only hard limit: never type a password, payment card number, or other credential yourself — ask the user to enter sensitive fields themselves. Everything else — including sending a message you were asked to send (WhatsApp, text, email, any chat) — is NOT a hard limit and needs no confirmation. A real reported failure: told to message a friend, DALVE typed the message and then stopped to ask "should I send this?" instead of just sending it — that is exactly the over-cautious pause this prompt tells you not to do. Once you've typed what the user asked you to send, send it (press Enter or click Send) in the same turn, then confirm from the next frame that it actually went — don't pause mid-task to ask permission for the very thing you were already told to do.
 
 Screen sharing only ever watches the user's main/primary monitor — if something they mention isn't visible there, it may be on a different monitor you can't see; say so rather than guessing or clicking blind.
 
@@ -248,6 +249,18 @@ const CLICK_PRICE_LEVEL_TOOL: FunctionDeclaration = {
     },
     required: ['price']
   }
+}
+
+const START_HAND_TRACKING_TOOL: FunctionDeclaration = {
+  name: 'start_hand_tracking',
+  description:
+    "Turns on the webcam and starts tracking the user's hand as a real cursor: the index fingertip's position moves the OS cursor, and pinching the thumb and index finger together clicks. Call this when the user asks to control the cursor/computer with their hand, turn on the webcam for hand control, or similar. Windows/Mac only (needs a webcam) — say so plainly if there's no camera available.",
+  parametersJsonSchema: { type: 'object', properties: {} }
+}
+const STOP_HAND_TRACKING_TOOL: FunctionDeclaration = {
+  name: 'stop_hand_tracking',
+  description: 'Turns off hand tracking and releases the webcam.',
+  parametersJsonSchema: { type: 'object', properties: {} }
 }
 
 const BROWSER_OPEN_TOOL: FunctionDeclaration = {
@@ -533,6 +546,8 @@ async function buildToolsForAgent(agent: AgentConfig | null): Promise<Tool[]> {
     ACTIVATE_APPLICATION_TOOL,
     FULLSCREEN_WINDOW_TOOL,
     OPEN_TRADING_SETUP_TOOL,
+    START_HAND_TRACKING_TOOL,
+    STOP_HAND_TRACKING_TOOL,
     LIST_AGENTS_TOOL,
     SWITCH_AGENT_TOOL,
     REMEMBER_FACT_TOOL,
@@ -881,6 +896,12 @@ async function handleToolCalls(functionCalls: FunctionCall[]): Promise<void> {
         response = { status: result, result: message }
       } else if (fc.name === 'open_trading_setup') {
         const { status, message } = await windowLayout.openTradingSetup()
+        response = { status, result: message }
+      } else if (fc.name === 'start_hand_tracking') {
+        const { status, message } = handTracking.start()
+        response = { status, result: message }
+      } else if (fc.name === 'stop_hand_tracking') {
+        const { status, message } = handTracking.stop()
         response = { status, result: message }
       } else if (fc.name === 'create_agent') {
         const type = args.type === 'bot' ? 'bot' : 'companion'

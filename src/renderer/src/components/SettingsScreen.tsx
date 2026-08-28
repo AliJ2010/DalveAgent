@@ -10,6 +10,7 @@ export function SettingsScreen(): React.JSX.Element {
   const refresh = useSettingsStore((s) => s.refresh)
   const setGeminiKey = useSettingsStore((s) => s.setGeminiKey)
   const setAnthropicKey = useSettingsStore((s) => s.setAnthropicKey)
+  const setTelegramBotToken = useSettingsStore((s) => s.setTelegramBotToken)
   const setComposioKey = useSettingsStore((s) => s.setComposioKey)
   const setDalveVoice = useSettingsStore((s) => s.setDalveVoice)
   const addMcpServer = useSettingsStore((s) => s.addMcpServer)
@@ -21,6 +22,7 @@ export function SettingsScreen(): React.JSX.Element {
 
   const [geminiInput, setGeminiInput] = useState('')
   const [anthropicInput, setAnthropicInput] = useState('')
+  const [telegramInput, setTelegramInput] = useState('')
   const [composioInput, setComposioInput] = useState('')
   const [composioError, setComposioError] = useState<string | null>(null)
   const [savedNotice, setSavedNotice] = useState<string | null>(null)
@@ -53,6 +55,13 @@ export function SettingsScreen(): React.JSX.Element {
     await setAnthropicKey(anthropicInput.trim())
     setAnthropicInput('')
     flash('Claude API key saved')
+  }
+
+  async function saveTelegram(): Promise<void> {
+    if (!telegramInput.trim()) return
+    await setTelegramBotToken(telegramInput.trim())
+    setTelegramInput('')
+    flash('Telegram bot token saved — message the bot once to link this device.')
   }
 
   async function saveComposio(): Promise<void> {
@@ -146,6 +155,27 @@ export function SettingsScreen(): React.JSX.Element {
           />
           <p style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 6 }}>
             Used as the reasoning engine for autonomous background tasks (screen/browser control).
+          </p>
+        </Section>
+
+        <Section title="Telegram remote control">
+          <KeyRow
+            placeholder={
+              settings?.telegramBotTokenSet
+                ? 'Token saved — enter a new one to replace it'
+                : 'Paste your Telegram bot token (from @BotFather)'
+            }
+            value={telegramInput}
+            onChange={setTelegramInput}
+            onSubmit={saveTelegram}
+            saved={settings?.telegramBotTokenSet}
+          />
+          <p style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 6 }}>
+            {settings?.telegramBotTokenSet
+              ? settings.telegramChatBound
+                ? 'Linked — message your bot on Telegram any time to run a command on this PC.'
+                : "Saved. Message your bot once on Telegram to link this device — the first chat to message it becomes the only one DALVE will listen to."
+              : 'Message @BotFather on Telegram, create a bot, and paste the token it gives you here.'}
           </p>
         </Section>
 

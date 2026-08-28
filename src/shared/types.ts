@@ -87,6 +87,8 @@ export interface SettingsState {
   mcpServers: McpServerConfig[]
   dalveVoice: string
   dalveMemory: string
+  telegramBotTokenSet: boolean
+  telegramChatBound: boolean
 }
 
 export type VoiceSessionState = 'idle' | 'listening' | 'speaking' | 'connecting' | 'error'

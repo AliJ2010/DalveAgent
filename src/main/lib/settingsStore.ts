@@ -21,6 +21,14 @@ interface StoredSecrets {
   /** Local-only, deliberately not in SyncableSettings — this device's own last-seen version, so
    *  the "you just got updated to vX" popup can tell new-to-this-device apart from every launch. */
   lastSeenVersion?: string
+  /** Local-only, deliberately not synced — a Telegram bot's long-poll (getUpdates) can only have
+   *  one consumer at a time, so syncing this across devices would make two DALVE installs fight
+   *  over the same bot's update stream. */
+  telegramBotToken?: string // base64-encoded, safeStorage-encrypted
+  /** The single chat allowed to issue remote commands — bound automatically to whichever chat
+   *  first messages the bot after a token is saved, so a leaked/guessed bot token alone can't let
+   *  a stranger control this PC. Cleared whenever the token changes. */
+  telegramChatId?: string
 }
 
 function defaultStore(): StoredSecrets {
@@ -136,7 +144,9 @@ class SettingsStore {
       composioConnections: this.data.composioConnections,
       mcpServers: this.data.mcpServers.map((s) => ({ ...s, authToken: s.authToken ? '••••••••' : undefined })),
       dalveVoice: this.data.dalveVoice,
-      dalveMemory: this.data.dalveMemory
+      dalveMemory: this.data.dalveMemory,
+      telegramBotTokenSet: !!this.data.telegramBotToken,
+      telegramChatBound: !!this.data.telegramChatId
     }
   }
 
@@ -195,6 +205,28 @@ class SettingsStore {
     this.data.composioApiKey = key ? encrypt(key) : undefined
     this.persist()
     this.notifyChange()
+  }
+
+  /** Saving a new (or cleared) token invalidates any existing chat binding — a fresh token means
+   *  a fresh bot, and the old binding shouldn't silently carry over to it. */
+  setTelegramBotToken(token: string): void {
+    this.data.telegramBotToken = token ? encrypt(token) : undefined
+    this.data.telegramChatId = undefined
+    this.persist()
+    this.notifyChange()
+  }
+
+  getTelegramBotToken(): string | undefined {
+    return this.data.telegramBotToken ? decrypt(this.data.telegramBotToken) : undefined
+  }
+
+  getTelegramChatId(): string | undefined {
+    return this.data.telegramChatId
+  }
+
+  setTelegramChatId(chatId: string): void {
+    this.data.telegramChatId = chatId
+    this.persist()
   }
 
   /** Main-process-only accessor. Never exposed to the renderer over IPC. */
