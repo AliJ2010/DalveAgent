@@ -25,6 +25,7 @@ import { attachWindow as attachAutonomousTaskWindow, stopAutonomousTask } from '
 import { attachWindow as attachAgentStoreWindow } from './lib/agentStore'
 import { attachWindow as attachSettingsStoreWindow } from './lib/settingsStore'
 import { attachWindow as attachHandTrackingWindow, stop as stopHandTracking } from './lib/handTracking'
+import { attachWindow as attachSkillsStoreWindow } from './lib/skillsStore'
 import { initAutoUpdate } from './lib/autoUpdate'
 import { initTelegramBridge } from './lib/telegramBridge'
 import { reconnectAll as reconnectMcpServers } from './lib/mcpClient'
@@ -154,6 +155,7 @@ function createWindow(): void {
   attachAgentStoreWindow(mainWindow)
   attachSettingsStoreWindow(mainWindow)
   attachHandTrackingWindow(mainWindow)
+  attachSkillsStoreWindow(mainWindow)
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)

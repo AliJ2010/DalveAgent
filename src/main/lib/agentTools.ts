@@ -96,6 +96,12 @@ const CLICK_GRID_CELL_TOOL: Tool = {
   description: 'Clicks one exact cell of a previously-defined non-web grid by row/col (0-indexed from top-left as currently visible).',
   input_schema: { type: 'object', properties: { label: { type: 'string' }, row: { type: 'number' }, col: { type: 'number' } }, required: ['label', 'row', 'col'] }
 }
+const UNDO_LAST_TYPED_TEXT_TOOL: Tool = {
+  name: 'undo_last_typed_text',
+  description:
+    "Sends the active app's own undo (Ctrl+Z) to revert the last text DALVE typed with type_text/press_key. Only works immediately after typing, before a click/drag/Enter/send happened since — a click or a sent message cannot be reliably undone this way, and this tool will say so honestly rather than pretend to fix it.",
+  input_schema: { type: 'object', properties: {} }
+}
 
 /** The physical/browser action tools every agent loop shares. Control-flow tools (when to stop,
  *  how to report completion) differ per caller and are added on top of this by each one. */
@@ -111,7 +117,8 @@ export const SHARED_TOOLS: Tool[] = [
   TYPE_TEXT_TOOL,
   PRESS_KEY_TOOL,
   DEFINE_GRID_TOOL,
-  CLICK_GRID_CELL_TOOL
+  CLICK_GRID_CELL_TOOL,
+  UNDO_LAST_TYPED_TEXT_TOOL
 ]
 
 /** Actions that are supposed to visibly change the page — worth a real before/after check rather
@@ -177,6 +184,10 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       }
       await screenControl.clickMouse(cell.centerX, cell.centerY, 'left', false, 'visible')
       return { status: 'SUCCESS', result: `Clicked row ${args.row}, col ${args.col}.` }
+    }
+    case 'undo_last_typed_text': {
+      const { status, message } = screenControl.undoLastTypedText()
+      return { status, result: message }
     }
     default:
       return { error: `Unrecognized action "${name}".` }

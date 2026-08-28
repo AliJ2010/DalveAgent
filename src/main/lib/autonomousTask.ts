@@ -7,7 +7,7 @@ import * as screenControl from './screenControl'
 import * as gridTargeting from './gridTargeting'
 import * as browserControl from './browserControl'
 import { SHARED_TOOLS, VERIFIABLE_ACTIONS, executeTool } from './agentTools'
-import type { AutonomousTaskEvent } from '@shared/types'
+import type { AutonomousTaskEvent, Subtask } from '@shared/types'
 
 // Claude, not Gemini — a real reasoning-engine swap (not just a bigger model within the same
 // family), after Gemini's flash tier repeatedly showed the same "common sense"/stalling failures
@@ -34,6 +34,12 @@ function emit(event: AutonomousTaskEvent): void {
 let timer: ReturnType<typeof setTimeout> | null = null
 let currentGoal: string | null = null
 let history: string[] = []
+let subtasks: Subtask[] = []
+// Tracks whether the SAME exact action (name + args) just failed again unchanged, across both
+// rounds within one tick and across ticks — a real, code-level signal (not a hope the model
+// remembers on its own) that the current approach isn't working and a different one is needed.
+let lastFailedSignature: string | null = null
+let lastFailedCount = 0
 
 export function isActive(): boolean {
   return currentGoal !== null
@@ -53,11 +59,31 @@ const FINISH_CYCLE_TOOL: Tool = {
 }
 const MARK_TASK_COMPLETE_TOOL: Tool = {
   name: 'mark_task_complete',
-  description: 'Call once the ENTIRE goal is fully accomplished — stops the background task completely.',
-  input_schema: { type: 'object', properties: { narration: { type: 'string' } }, required: ['narration'] }
+  description:
+    'Call once the ENTIRE goal is fully accomplished — stops the background task completely. finalSummary must synthesize everything accomplished into ONE coherent result (e.g. "Found 3 important emails today, summarized them, and drafted replies to 2"), not a restatement of individual steps.',
+  input_schema: {
+    type: 'object',
+    properties: { narration: { type: 'string' }, finalSummary: { type: 'string' } },
+    required: ['narration', 'finalSummary']
+  }
+}
+const SET_SUBTASKS_TOOL: Tool = {
+  name: 'set_subtasks',
+  description:
+    'For a goal with more than one distinct chunk of work (e.g. "go through emails, summarize the important ones, draft replies"), call this ONCE near the start to declare your plan as a checklist of short subtask descriptions, in order. Skip entirely for a single simple action. Calling it again replaces the whole list.',
+  input_schema: {
+    type: 'object',
+    properties: { subtasks: { type: 'array', items: { type: 'string' }, description: 'Short descriptions, in the order you plan to do them.' } },
+    required: ['subtasks']
+  }
+}
+const COMPLETE_SUBTASK_TOOL: Tool = {
+  name: 'complete_subtask',
+  description: 'Marks one subtask (from set_subtasks) as done, by its exact text.',
+  input_schema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] }
 }
 
-const ALL_TOOLS: Tool[] = [...SHARED_TOOLS, FINISH_CYCLE_TOOL, MARK_TASK_COMPLETE_TOOL]
+const ALL_TOOLS: Tool[] = [...SHARED_TOOLS, FINISH_CYCLE_TOOL, MARK_TASK_COMPLETE_TOOL, SET_SUBTASKS_TOOL, COMPLETE_SUBTASK_TOOL]
 
 /**
  * Starts a background loop that watches the screen and acts on its own timer, independent of
@@ -69,9 +95,13 @@ export function startAutonomousTask(goal: string): void {
   if (isActive()) stopAutonomousTask('replaced by a new task')
   currentGoal = goal
   history = []
+  subtasks = []
+  lastFailedSignature = null
+  lastFailedCount = 0
   gridTargeting.clearGrids()
   screenControl.setAutonomousControlGranted(true)
   emit({ type: 'started', goal })
+  emit({ type: 'subtasks', subtasks })
   log.info(`[autonomousTask] started, goal="${goal}", log file: ${log.transports.file.getFile().path}`)
 
   // A self-rescheduling timeout, not setInterval: a real tick (a Claude call plus several tool
@@ -101,12 +131,12 @@ export function startAutonomousTask(goal: string): void {
   void runCycle()
 }
 
-export function stopAutonomousTask(reason = 'stopped by user'): void {
+export function stopAutonomousTask(reason = 'stopped by user', summary?: string): void {
   if (timer) {
     clearTimeout(timer)
     timer = null
   }
-  if (currentGoal) emit({ type: 'stopped', reason })
+  if (currentGoal) emit({ type: 'stopped', reason, summary })
   currentGoal = null
   screenControl.setAutonomousControlGranted(false)
 }
@@ -143,8 +173,21 @@ Real targeting priority, strongest to weakest — always use the strongest one t
 
 You can take several actions across this check, but for anything that changes the page (a click, typing, a key press) prefer ONE such action per turn, then look at its result before deciding the next one — every click/type/press result tells you plainly if the page's visible text didn't change at all, which means it didn't work; when you see that, do not repeat the same action, and do not claim it succeeded. Only skip this one-at-a-time discipline for pure reads (browser_read_text, browser_evaluate) — those are safe to chain. Call finish_cycle once there's genuinely nothing further to do until the next check — never mid-sequence. Call mark_task_complete only once the ENTIRE goal is done.
 
+The goal itself may span multiple applications — reading a value in one place and acting on it somewhere else is normal, not a reason to stop and report back partway through. Carry whatever you just read forward into the next app or site yourself, across as many actions/cycles as it takes.
+
 UNCONDITIONAL rule for any goal that involves a chat/messaging app (WhatsApp or otherwise): every single cycle, check for new/unread messages and, if this goal covers replying to them, draft and actually send a reply yourself, completely on your own — right now, this cycle, not "noted, will reply once told." Never call finish_cycle after merely noticing a new message that needs a reply; that is exactly the "waits for the user to say reply" failure this task exists to prevent. The only acceptable reason to not reply immediately is genuine ambiguity the goal itself doesn't resolve (e.g. no idea what the correct answer/decision is) — in that case say so in your narration, but still don't just sit on an unanswered message silently.
 
+RECOVERY PROTOCOL — when something fails, diagnose it and try a genuinely different method, don't repeat the same call or just give up and report back:
+- A button/element wasn't found where expected → the layout may differ from what you assumed; re-observe first (browser_read_text or a fresh look at the screenshot), then try a different targeting tier (OCR/click_text instead of click_element, or vice versa) rather than the identical call again.
+- An app didn't launch / isn't where expected → try activate_application in case it's already running under a slightly different title, or open_application again — don't silently stall.
+- A site looks logged out → you cannot complete a real login yourself (no credentials); say so plainly in your narration and call finish_cycle rather than looping on it, but do check again next cycle in case the user logged back in.
+- An unexpected popup/dialog appears → read it (it's often blocking everything behind it) and dismiss it (find and click its close/cancel/OK button) before retrying the original action, rather than treating it as the same failure.
+- The page/screen looks different than last check → re-observe before acting; don't act on a stale assumption of what's on screen.
+- A tool/API call returns an error → read the actual error. A rate-limit/timeout-shaped error is worth one retry after this cycle; a "not found"/"invalid"/structural error means the approach itself is wrong and needs a different method, not a retry.
+If you see a "repeated failure" warning on a tool result below, that means this exact action already failed and was retried unchanged — you MUST do something meaningfully different this time (different tool, different target, or re-observe first), not call it again as-is.
+
+For a goal with multiple distinct chunks of work, call set_subtasks ONCE near the start to declare your plan, then complete_subtask as each one finishes — this is your own explicit progress tracker, don't skip it for anything non-trivial. Skip it entirely for a single simple action.
+${subtasks.length > 0 ? `\nCurrent checklist:\n${subtasks.map((s) => `${s.done ? '[x]' : '[ ]'} ${s.text}`).join('\n')}\n` : ''}
 Recent history of this task:\n${history.length > 0 ? history.join('\n') : '(nothing yet)'}`
 
   // Ground truth for "did anything change" must not depend on the model remembering to ask for
@@ -203,15 +246,45 @@ Recent history of this task:\n${history.length > 0 ? history.join('\n') : '(noth
 
     let shouldEndCycle = false
     let shouldEndTask = false
+    let finalSummary: string | undefined
     const toolResults: ToolResultBlockParam[] = []
     for (const call of toolUses) {
       const callArgs = (call.input ?? {}) as Record<string, unknown>
 
       if (call.name === 'finish_cycle' || call.name === 'mark_task_complete') {
         pushHistory(String(callArgs.narration ?? call.name))
-        if (call.name === 'mark_task_complete') shouldEndTask = true
+        if (call.name === 'mark_task_complete') {
+          shouldEndTask = true
+          finalSummary = String(callArgs.finalSummary ?? callArgs.narration ?? '')
+        }
         shouldEndCycle = true
         toolResults.push({ type: 'tool_result', tool_use_id: call.id, content: 'acknowledged' })
+        continue
+      }
+
+      if (call.name === 'set_subtasks') {
+        const list = Array.isArray(callArgs.subtasks) ? (callArgs.subtasks as unknown[]).map(String) : []
+        subtasks = list.map((text, i) => ({ id: `subtask_${i}`, text, done: false }))
+        emit({ type: 'subtasks', subtasks })
+        pushHistory(`Plan: ${list.join(' | ')}`)
+        toolResults.push({ type: 'tool_result', tool_use_id: call.id, content: 'Checklist set.' })
+        continue
+      }
+
+      if (call.name === 'complete_subtask') {
+        const text = String(callArgs.text ?? '')
+        const idx = subtasks.findIndex((s) => s.text === text)
+        if (idx >= 0) {
+          subtasks[idx] = { ...subtasks[idx], done: true }
+          emit({ type: 'subtasks', subtasks })
+          toolResults.push({ type: 'tool_result', tool_use_id: call.id, content: 'Marked done.' })
+        } else {
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: call.id,
+            content: `No subtask matches "${text}" exactly — check the text from set_subtasks.`
+          })
+        }
         continue
       }
 
@@ -235,13 +308,31 @@ Recent history of this task:\n${history.length > 0 ? history.join('\n') : '(noth
         }
       }
 
+      // Real, code-level recovery signal — not dependent on the model remembering the recovery
+      // protocol on its own. Fires only when the EXACT same call (name + args) fails/no-ops twice
+      // in a row, so genuinely retrying a flaky action once is still fine.
+      const failed = typeof result.error === 'string' || result.status === 'FAILED' || typeof result.warning === 'string'
+      const signature = `${call.name}:${JSON.stringify(callArgs)}`
+      if (failed && signature === lastFailedSignature) {
+        lastFailedCount++
+        if (lastFailedCount >= 2) {
+          result.warning = `${typeof result.warning === 'string' ? result.warning + ' ' : ''}REPEATED FAILURE: this exact action (same tool, same arguments) has now failed ${lastFailedCount} times in a row — see the RECOVERY PROTOCOL above. Do not call it again unchanged.`
+        }
+      } else if (failed) {
+        lastFailedSignature = signature
+        lastFailedCount = 1
+      } else {
+        lastFailedSignature = null
+        lastFailedCount = 0
+      }
+
       log.info(`[autonomousTask] ${call.name} result=${JSON.stringify(result).slice(0, 500)}`)
       pushHistory(`${call.name}(${JSON.stringify(callArgs).slice(0, 200)}) -> ${JSON.stringify(result).slice(0, 300)}`)
       toolResults.push({ type: 'tool_result', tool_use_id: call.id, content: JSON.stringify(result).slice(0, 4000) })
     }
 
     if (shouldEndTask) {
-      stopAutonomousTask('task completed')
+      stopAutonomousTask('task completed', finalSummary)
       return
     }
     if (shouldEndCycle) return

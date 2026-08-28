@@ -133,13 +133,37 @@ export type VoiceEvent =
   /** Fires around a tool call actually executing — lets the UI show "working" instead of leaving
    *  the user unsure whether anything is happening between "I'll do that" and a spoken result. */
   | { type: 'toolActivity'; active: boolean; label?: string }
+  /** One real completed step for the Action Timeline — fired after EVERY tool call resolves
+   *  (success or failure), reusing that tool's own real result/error text rather than a made-up
+   *  description, so the timeline never claims a step happened that didn't actually run. */
+  | { type: 'actionLog'; entry: ActionLogEntry }
+
+export interface ActionLogEntry {
+  id: string
+  label: string
+  status: 'success' | 'error'
+  detail?: string
+  timestamp: number
+}
 
 export type ScreenControlEvent = { type: 'active'; active: boolean }
 
+export interface Subtask {
+  id: string
+  text: string
+  done: boolean
+}
+
 export type AutonomousTaskEvent =
   | { type: 'started'; goal: string }
-  | { type: 'stopped'; reason: string }
+  // `summary` is set only when the task finished by genuinely completing (mark_task_complete),
+  // carrying the ONE synthesized result rather than the raw step-by-step log — undefined for a
+  // manual/external stop, which has no "result" to summarize.
+  | { type: 'stopped'; reason: string; summary?: string }
   | { type: 'log'; text: string }
+  /** Replaces the whole checklist — sent once a multi-step goal has been broken down, and again
+   *  whenever a subtask's done state changes. */
+  | { type: 'subtasks'; subtasks: Subtask[] }
 
 export const PRIORITY_COMPOSIO_APPS: { key: string; name: string }[] = [
   { key: 'gmail', name: 'Gmail' },

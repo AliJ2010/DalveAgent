@@ -295,6 +295,7 @@ export function setCursorPositionAbsolute(x: number, y: number): void {
  *  is the user's own physical click, not an AI decision, so this isn't gated either. */
 export function clickAtCurrentPosition(button: 'left' | 'right' = 'left'): void {
   getRobot().mouseClick(button)
+  canUndoTyping = false
 }
 
 /** Explicit press/release (not a single click) — what hand-tracking's click-and-hold-to-drag
@@ -303,6 +304,7 @@ export function clickAtCurrentPosition(button: 'left' | 'right' = 'left'): void 
  *  as the other hand-tracking primitives here, so this isn't gated either. */
 export function pressMouseDown(button: 'left' | 'right' = 'left'): void {
   getRobot().mouseToggle('down', button)
+  canUndoTyping = false
 }
 
 export function releaseMouseUp(button: 'left' | 'right' = 'left'): void {
@@ -342,6 +344,7 @@ export async function clickMouse(
     await animateTo(p.x, p.y)
   }
   r.mouseClick(button, double)
+  canUndoTyping = false
 }
 
 /**
@@ -376,6 +379,7 @@ export async function dragMouse(
   } finally {
     r.mouseToggle('up')
   }
+  canUndoTyping = false
 }
 
 export type TracePattern = 'circle' | 'square' | 'zigzag' | 'line'
@@ -447,9 +451,16 @@ export async function tracePattern(
   await animatePath(points, durationMs)
 }
 
+// Real, honest scope for "undo": only typed text has a safe, well-defined inverse (the target
+// app's own Ctrl+Z) — a click, a send, or a drag has no reliable universal undo, and pretending
+// otherwise would be worse than not offering it. Cleared by anything that moves on from the typed
+// text (a click, a drag, Enter/Return) since undoing it would no longer make sense at that point.
+let canUndoTyping = false
+
 export function typeText(text: string): void {
   requireControl()
   getRobot().typeString(text)
+  canUndoTyping = true
 }
 
 const VALID_MODIFIERS = new Set(['alt', 'command', 'control', 'shift'])
@@ -458,6 +469,30 @@ export function pressKey(key: string, modifiers: string[] = []): void {
   requireControl()
   const mods = modifiers.map((m) => m.toLowerCase()).filter((m) => VALID_MODIFIERS.has(m))
   getRobot().keyTap(key.toLowerCase(), mods)
+  if (['enter', 'return'].includes(key.toLowerCase())) canUndoTyping = false
+}
+
+/** Best-effort, honest undo: sends the frontmost app's own Ctrl+Z (Cmd+Z on Mac) right after
+ *  DALVE typed something — the same thing a human would do to undo it themselves. Deliberately
+ *  refuses once a click/drag/Enter has happened since, rather than pretending it would still work. */
+export function undoLastTypedText(): { status: 'SUCCESS' | 'FAILED'; message: string } {
+  if (!canUndoTyping) {
+    return {
+      status: 'FAILED',
+      message:
+        "Nothing safely undoable right now — this only works immediately after DALVE typed something, before a click, Enter, or a send happened since. Clicks and sent messages can't be reliably undone this way."
+    }
+  }
+  canUndoTyping = false
+  const r = getRobot()
+  const modifier = process.platform === 'darwin' ? 'command' : 'control'
+  r.keyToggle(modifier, 'down')
+  try {
+    r.keyTap('z')
+  } finally {
+    r.keyToggle(modifier, 'up')
+  }
+  return { status: 'SUCCESS', message: "Sent the app's own undo (Ctrl+Z) for the last text DALVE typed — check that it actually reverted what you expected." }
 }
 
 // Scrolling only changes what's visible, never submits or commits anything — treated like

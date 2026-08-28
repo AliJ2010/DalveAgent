@@ -21,6 +21,7 @@ import * as browserControl from './browserControl'
 import * as autonomousTask from './autonomousTask'
 import * as handTracking from './handTracking'
 import * as mcpClient from './mcpClient'
+import { skillsStore as skillsDb, isRecording, startRecording, stopRecording, recordStep, SKILL_META_TOOLS } from './skillsStore'
 import type { AgentConfig, VoiceEvent } from '@shared/types'
 
 /**
@@ -61,6 +62,24 @@ export function attachWindow(window: BrowserWindow): void {
 
 function emit(event: VoiceEvent): void {
   win?.webContents.send('voice:event', event)
+}
+
+let actionLogCounter = 0
+
+/** Feeds the Action Timeline — reuses the tool call's OWN real result/error text rather than a
+ *  synthesized description, so the timeline can never claim a step happened that didn't. */
+function emitActionLog(label: string, result: Record<string, unknown>): void {
+  const detail = typeof result.error === 'string' ? result.error : typeof result.result === 'string' ? result.result : undefined
+  emit({
+    type: 'actionLog',
+    entry: {
+      id: `groq_${Date.now()}_${actionLogCounter++}`,
+      label,
+      status: typeof result.error === 'string' ? 'error' : 'success',
+      detail: detail?.slice(0, 200),
+      timestamp: Date.now()
+    }
+  })
 }
 
 type Phase = 'idle' | 'listening' | 'thinking' | 'speaking'
@@ -252,6 +271,8 @@ Real targeting priority, strongest to weakest: (1) A direct integration tool (Co
 
 Never describe a physical action before actually calling the tool, and never describe an outcome (a message sent, a piece moved) until the result confirms it actually happened.
 
+A single instruction often spans multiple applications — "read the price in this email, put it into Excel, work out the margin, send the result on WhatsApp" is ONE task. Switching which app you're acting in partway through is not a stopping point — carry whatever value you just read forward into the next app yourself, across as many tool-call rounds as it takes, and keep going until the whole chain is actually done.
+
 IMPORTANT structural limit to understand about yourself: this engine only ever takes a turn when the user just spoke — there is no continuous screen watching here at all, unlike a fully live session. Nothing "wakes you up" on its own when a new WhatsApp message arrives while the user isn't talking to you. That is exactly what start_autonomous_task is for — a separate background loop that actively re-checks the screen every ~20 seconds and can act with nobody present. Whenever what's being asked amounts to "keep doing this without me talking to you" — monitoring a chat (WhatsApp especially) and replying to new messages as they come in is the single most common real case — you MUST call start_autonomous_task, every time. Give it a clear one-sentence goal; it keeps going until the goal is done, the user stops it, or you call stop_autonomous_task.`
 
 // Groq's free tier caps this model at 8,000 tokens/minute AND 3 images per request — confirmed
@@ -317,7 +338,12 @@ async function runTurn(userText: string): Promise<void> {
     const tools = await buildTools()
     emit({ type: 'toolActivity', active: false })
 
-    for (let round = 0; round < 8; round++) {
+    // Raised from 8 — a real cross-app task (read a value in one app, switch to another, act on
+    // it, switch again) can easily need more tool-call rounds than a single-app action, and the
+    // old cap silently dropped the turn with zero explanation if it ran out mid-chain.
+    const MAX_ROUNDS = 16
+    let exhausted = true
+    for (let round = 0; round < MAX_ROUNDS; round++) {
       const response = await client.chat.completions.create({
         model: CHAT_MODEL,
         messages: history,
@@ -331,6 +357,7 @@ async function runTurn(userText: string): Promise<void> {
       if (!message.tool_calls || message.tool_calls.length === 0) {
         const text = message.content ?? ''
         if (text) await speak(text)
+        exhausted = false
         break
       }
 
@@ -348,10 +375,19 @@ async function runTurn(userText: string): Promise<void> {
         } catch (err) {
           result = { error: err instanceof Error ? err.message : String(err) }
         }
+        emitActionLog(call.function.name, result)
+        if (isRecording() && !SKILL_META_TOOLS.has(call.function.name) && typeof result.error !== 'string' && result.status !== 'FAILED') {
+          recordStep(call.function.name, args)
+        }
         history.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(result).slice(0, 4000) })
       }
       emit({ type: 'toolActivity', active: false })
     }
+
+    // Same honest "ran out of room" acknowledgment autonomousTask.ts already gives on its own
+    // round cap — silence here would look exactly like the "stuck" symptom this session already
+    // root-caused once tonight, just from a different limit.
+    if (exhausted) await speak("I've made progress on that but hit my step limit for one reply — tell me to continue and I'll keep going from here.")
   } catch (err) {
     const raw = err instanceof Error ? err.message : String(err)
     log.error('[groqVoice] turn failed:', err instanceof Error ? err.stack : err)
@@ -546,6 +582,11 @@ const STATIC_TOOLS: ChatCompletionTool[] = [
     properties: { deltaX: { type: 'number' }, deltaY: { type: 'number' } }
   }),
   tool('take_screenshot', "Saves a real screenshot of the user's screen as a PNG file they can open later — distinct from the automatic vision context DALVE already sees every turn.", { type: 'object', properties: {} }),
+  tool('undo_last_typed_text', "Sends the active app's own undo (Ctrl+Z) to revert the last text DALVE typed. Only works immediately after typing, before a click/drag/Enter/send happened since — honestly refuses otherwise rather than pretending a click or sent message can be undone this way.", { type: 'object', properties: {} }),
+  tool('start_recording_skill', "Starts recording every action DALVE takes from now on, until stop_recording_skill is called. Use when the user asks to teach/show DALVE how to do something so it can repeat it later — they'll walk through the steps live by voice as usual.", { type: 'object', properties: {} }),
+  tool('stop_recording_skill', 'Stops recording and saves everything done since start_recording_skill as a named, replayable skill.', { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] }),
+  tool('run_skill', 'Replays a previously recorded skill by name, step by step.', { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] }),
+  tool('list_skills', 'Lists every recorded skill by name.', { type: 'object', properties: {} }),
   tool('start_autonomous_task', 'Hands off a task to a background loop that keeps watching the screen and acting even after this conversation ends.', {
     type: 'object',
     properties: { goal: { type: 'string' } },
@@ -735,6 +776,46 @@ async function executeVoiceTool(name: string, args: Record<string, unknown>): Pr
     case 'take_screenshot': {
       const { status, path, message } = await screenControl.saveScreenshot()
       return { status, path, result: message }
+    }
+    case 'undo_last_typed_text': {
+      const { status, message } = screenControl.undoLastTypedText()
+      return { status, result: message }
+    }
+    case 'start_recording_skill':
+      startRecording()
+      return { result: "Recording started — I'll save everything I do from now on once you tell me to stop." }
+    case 'stop_recording_skill': {
+      const name = String(args.name ?? '').trim()
+      if (!name) return { error: 'Need a name to save this skill as.' }
+      const skill = stopRecording(name)
+      if (!skill) return { error: 'Nothing was recorded — start_recording_skill needs to be called first, and at least one action needs to happen.' }
+      return { status: 'SUCCESS', result: `Saved "${name}" as a skill with ${skill.steps.length} step(s).` }
+    }
+    case 'run_skill': {
+      const name = String(args.name ?? '').trim()
+      const skill = skillsDb.get(name)
+      if (!skill) return { status: 'FAILED', error: `No skill named "${name}".` }
+      for (let i = 0; i < skill.steps.length; i++) {
+        const step = skill.steps[i]
+        let stepResult: Record<string, unknown>
+        try {
+          stepResult = await executeVoiceTool(step.tool, step.args)
+        } catch (err) {
+          stepResult = { error: err instanceof Error ? err.message : String(err) }
+        }
+        emitActionLog(`${step.tool} (skill: ${name})`, stepResult)
+        if (typeof stepResult.error === 'string' || stepResult.status === 'FAILED') {
+          return {
+            status: 'FAILED',
+            error: `Skill "${name}" stopped at step ${i + 1}/${skill.steps.length} (${step.tool}): ${stepResult.error ?? stepResult.result}`
+          }
+        }
+      }
+      return { status: 'SUCCESS', result: `Replayed all ${skill.steps.length} step(s) of "${name}".` }
+    }
+    case 'list_skills': {
+      const skills = skillsDb.list()
+      return { result: skills.length === 0 ? 'No skills recorded yet.' : skills.map((s) => `- ${s.name} (${s.steps.length} steps)`).join('\n') }
     }
     case 'start_autonomous_task': {
       const goal = String(args.goal ?? '').trim()

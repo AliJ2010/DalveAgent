@@ -18,6 +18,7 @@ import * as windowLayout from './windowLayout'
 import * as priceAxis from './priceAxis'
 import * as handTracking from './handTracking'
 import * as mcpClient from './mcpClient'
+import { skillsStore as skillsDb, isRecording, startRecording, stopRecording, recordStep, SKILL_META_TOOLS } from './skillsStore'
 import * as uiAutomation from './uiAutomation'
 import * as ocr from './ocr'
 import * as gridTargeting from './gridTargeting'
@@ -37,6 +38,8 @@ const DALVE_SYSTEM_PROMPT = `You are DALVE, a voice-first AI operating system. Y
 When given a task, get straight to doing it. NEVER repeat, paraphrase, or summarize the user's instruction back to them before acting — that includes at the start of a task, mid-task, and when resuming after a pause. A short natural acknowledgment ("on it," "sure") is fine; anything longer than that before you've actually started acting is a mistake. Only pause to ask a real clarifying question when you're genuinely unsure what the user means; don't ask for permission to proceed once you understand what they want, and don't stall or go quiet — if you're unsure of the next concrete step, say so and try something rather than freezing.
 
 You are expected to be genuinely autonomous once given a goal: figure things out, try things, adapt when something doesn't work, and keep making forward progress without checking in after every little step. If your first approach doesn't pan out (a link doesn't work, a page looks different than expected), think of another way to get there yourself — search differently, try a different site, look at another monitor — rather than reporting the obstacle back to the user and waiting. Only come back to the user when you're truly stuck after multiple genuine attempts, need information only they have, or the task is done.
+
+A single instruction often spans multiple applications — "read the price in this email, put it into Excel, work out the margin, send the result on WhatsApp" is ONE task, not four separate ones. Switching which app is frontmost partway through is not a stopping point or a reason to check back in — carry whatever value you just read (a number, a name, a date) forward yourself into the next app exactly like a person copying it over, and keep going until the whole chain is actually done.
 
 You can also see and physically control the user's computer, like a partner sitting at the keyboard with them. Call start_screen_share to begin watching their screen as a live video feed (roughly one frame per second) — after that you simply see the screen, no separate "look" tool needed. Once sharing is on, you have full standing authorization to move the mouse, click, type, press keys, and scroll — just do it, no permission tool to call first.
 
@@ -268,6 +271,31 @@ const TAKE_SCREENSHOT_TOOL: FunctionDeclaration = {
   name: 'take_screenshot',
   description:
     "Saves a real screenshot of the user's screen as a PNG file they can open later — distinct from the live vision context DALVE already sees every frame. Call this when the user explicitly asks for a screenshot to be saved/taken, not for ordinary looking at the screen.",
+  parametersJsonSchema: { type: 'object', properties: {} }
+}
+
+const UNDO_LAST_TYPED_TEXT_TOOL: FunctionDeclaration = {
+  name: 'undo_last_typed_text',
+  description:
+    "Sends the active app's own undo (Ctrl+Z) to revert the last text DALVE typed with type_text/press_key. Only works immediately after typing, before a click/drag/Enter/send happened since — a click or a sent message cannot be reliably undone this way, and this tool will say so honestly rather than pretend to fix it.",
+  parametersJsonSchema: { type: 'object', properties: {} }
+}
+
+const START_RECORDING_SKILL_TOOL: FunctionDeclaration = {
+  name: 'start_recording_skill',
+  description:
+    "Starts recording every action DALVE takes from now on, until stop_recording_skill is called. Use when the user asks to teach/show DALVE how to do something so it can repeat it later — they'll walk through the steps live by voice as usual, exactly like a normal instruction.",
+  parametersJsonSchema: { type: 'object', properties: {} }
+}
+const STOP_RECORDING_SKILL_TOOL: FunctionDeclaration = {
+  name: 'stop_recording_skill',
+  description:
+    'Stops recording and saves everything done since start_recording_skill as a named skill. Replaying a saved skill (run_skill) is only available on the Groq+ElevenLabs voice engine right now, not here — if the user wants to replay one immediately, tell them plainly they need to switch engines in Settings first.',
+  parametersJsonSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] }
+}
+const LIST_SKILLS_TOOL: FunctionDeclaration = {
+  name: 'list_skills',
+  description: 'Lists every recorded skill by name.',
   parametersJsonSchema: { type: 'object', properties: {} }
 }
 
@@ -526,6 +554,24 @@ function emit(event: VoiceEvent): void {
   win?.webContents.send('voice:event', event)
 }
 
+let actionLogCounter = 0
+
+/** Feeds the Action Timeline — reuses the tool call's OWN real result/error text rather than a
+ *  synthesized description, so the timeline can never claim a step happened that didn't. */
+function emitActionLog(label: string, response: Record<string, unknown>): void {
+  const detail = typeof response.error === 'string' ? response.error : typeof response.result === 'string' ? response.result : undefined
+  emit({
+    type: 'actionLog',
+    entry: {
+      id: `gemini_${Date.now()}_${actionLogCounter++}`,
+      label,
+      status: typeof response.error === 'string' ? 'error' : 'success',
+      detail: detail?.slice(0, 200),
+      timestamp: Date.now()
+    }
+  })
+}
+
 export function isSessionActive(): boolean {
   return session !== null
 }
@@ -557,6 +603,10 @@ async function buildToolsForAgent(agent: AgentConfig | null): Promise<Tool[]> {
     START_HAND_TRACKING_TOOL,
     STOP_HAND_TRACKING_TOOL,
     TAKE_SCREENSHOT_TOOL,
+    UNDO_LAST_TYPED_TEXT_TOOL,
+    START_RECORDING_SKILL_TOOL,
+    STOP_RECORDING_SKILL_TOOL,
+    LIST_SKILLS_TOOL,
     LIST_AGENTS_TOOL,
     SWITCH_AGENT_TOOL,
     REMEMBER_FACT_TOOL,
@@ -917,6 +967,25 @@ async function handleToolCalls(functionCalls: FunctionCall[]): Promise<void> {
       } else if (fc.name === 'take_screenshot') {
         const { status, path, message } = await screenControl.saveScreenshot()
         response = { status, path, result: message }
+      } else if (fc.name === 'undo_last_typed_text') {
+        const { status, message } = screenControl.undoLastTypedText()
+        response = { status, result: message }
+      } else if (fc.name === 'start_recording_skill') {
+        startRecording()
+        response = { result: "Recording started — I'll save everything I do from now on once you tell me to stop." }
+      } else if (fc.name === 'stop_recording_skill') {
+        const skillName = String(args.name ?? '').trim()
+        if (!skillName) {
+          response = { error: 'Need a name to save this skill as.' }
+        } else {
+          const skill = stopRecording(skillName)
+          response = skill
+            ? { status: 'SUCCESS', result: `Saved "${skillName}" as a skill with ${skill.steps.length} step(s).` }
+            : { error: 'Nothing was recorded — start_recording_skill needs to be called first, and at least one action needs to happen.' }
+        }
+      } else if (fc.name === 'list_skills') {
+        const skills = skillsDb.list()
+        response = { result: skills.length === 0 ? 'No skills recorded yet.' : skills.map((s) => `- ${s.name} (${s.steps.length} steps)`).join('\n') }
       } else if (fc.name === 'create_agent') {
         const type = args.type === 'bot' ? 'bot' : 'companion'
         const agent = agentStore.create({
@@ -1186,6 +1255,10 @@ async function handleToolCalls(functionCalls: FunctionCall[]): Promise<void> {
       response = { error: err instanceof Error ? err.message : String(err) }
     }
 
+    emitActionLog(fc.name, response)
+    if (isRecording() && !SKILL_META_TOOLS.has(fc.name) && typeof response.error !== 'string' && response.status !== 'FAILED') {
+      recordStep(fc.name, args)
+    }
     functionResponses.push({ id: fc.id, name: fc.name, response })
   }
 

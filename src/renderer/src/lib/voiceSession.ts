@@ -1,6 +1,7 @@
 import { useVoiceStore } from '../state/voiceStore'
 import { useScreenControlStore } from '../state/screenControlStore'
 import { useAutonomousTaskStore } from '../state/autonomousTaskStore'
+import { useActionTimelineStore } from '../state/actionTimelineStore'
 import { startAudioCapture, type AudioCaptureHandle } from './audioCapture'
 import { AudioPlayer } from './audioPlayback'
 
@@ -18,6 +19,20 @@ function errorMessage(err: unknown): string {
 function isSessionRunning(): boolean {
   const state = useVoiceStore.getState().sessionState
   return state !== 'idle' && state !== 'error'
+}
+
+/** autonomousTask.ts's log lines are raw `toolName(args) -> {result}` strings, not structured
+ *  events — this pulls a real tool-name label and result detail out of that shape so the Action
+ *  Timeline can show the same clean "label + detail" format as voice-session actionLog entries,
+ *  falling back to the whole line for plain narration text that isn't a tool-call log at all. */
+function summarizeAutonomousLog(text: string): { label: string; detail?: string; status: 'success' | 'error' | 'info' } {
+  const parenIdx = text.indexOf('(')
+  const arrowIdx = text.indexOf(' -> ')
+  if (parenIdx > 0 && arrowIdx > parenIdx) {
+    const detail = text.slice(arrowIdx + 4, arrowIdx + 204)
+    return { label: text.slice(0, parenIdx), detail, status: detail.includes('"error"') ? 'error' : 'success' }
+  }
+  return { label: text.slice(0, 160), status: 'info' }
 }
 
 /**
@@ -62,6 +77,9 @@ export function initVoiceBridge(): void {
       case 'toolActivity':
         store.setToolActive(event.active, event.label)
         break
+      case 'actionLog':
+        useActionTimelineStore.getState().addEntry({ ...event.entry, source: 'voice' })
+        break
     }
   })
 }
@@ -92,11 +110,25 @@ export function initAutonomousTaskBridge(): void {
         store.setActive(true, event.goal)
         break
       case 'stopped':
+        if (event.summary) store.setSummary(event.summary)
         store.setActive(false, null)
         break
-      case 'log':
-        store.addLog(event.text)
+      case 'subtasks':
+        store.setSubtasks(event.subtasks)
         break
+      case 'log': {
+        store.addLog(event.text)
+        const { label, detail, status } = summarizeAutonomousLog(event.text)
+        useActionTimelineStore.getState().addEntry({
+          id: `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          label,
+          detail,
+          status,
+          timestamp: Date.now(),
+          source: 'task'
+        })
+        break
+      }
     }
   })
 }

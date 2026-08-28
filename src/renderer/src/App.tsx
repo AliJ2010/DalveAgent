@@ -10,6 +10,7 @@ import { AgentsCanvas } from './components/AgentsCanvas'
 import { ScreenControlOverlay } from './components/ScreenControlOverlay'
 import { HandTrackingController } from './components/HandTrackingController'
 import { AutonomousTaskOverlay } from './components/AutonomousTaskOverlay'
+import { ActionTimeline } from './components/ActionTimeline'
 import { AuthScreen } from './components/AuthScreen'
 import { VersionPopup } from './components/VersionPopup'
 import { useUiStore } from './state/uiStore'
@@ -87,6 +88,7 @@ function App(): React.JSX.Element {
       <HandTrackingController />
       <ScreenControlOverlay />
       <AutonomousTaskOverlay />
+      <ActionTimeline />
       <Sidebar />
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative', minWidth: 0 }}>
         <TopBar />
