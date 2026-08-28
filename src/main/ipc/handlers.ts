@@ -9,7 +9,7 @@ import * as autonomousTask from '../lib/autonomousTask'
 import * as cloudSync from '../lib/cloudSync'
 import * as handTracking from '../lib/handTracking'
 import * as mcpClient from '../lib/mcpClient'
-import type { AgentConfig } from '@shared/types'
+import type { AgentConfig, HandFrame } from '@shared/types'
 
 export function registerIpcHandlers(): void {
   // Lets the UI show the real running version, e.g. to confirm an auto-update actually landed
@@ -228,8 +228,8 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('handTracking:stop', () => handTracking.stop())
   // High-frequency (per-frame) — ipcMain.on, not handle, since there's nothing to await or
   // return per frame and a round-trip Promise per frame would just add latency to the cursor.
-  ipcMain.on('handTracking:frame', (_e, x: number, y: number, pinching: boolean) => {
-    handTracking.onFrame(x, y, pinching)
+  ipcMain.on('handTracking:frame', (_e, frame: HandFrame) => {
+    handTracking.onFrame(frame)
   })
 
   // --- Autonomous task ---

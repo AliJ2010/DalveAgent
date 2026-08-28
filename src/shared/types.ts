@@ -91,6 +91,21 @@ export interface SettingsState {
   telegramChatBound: boolean
 }
 
+/** One tracked-hand frame from the renderer's camera+MediaPipe pipeline, sent to the main
+ *  process over IPC — see handTracking.ts for how each field drives cursor/click/zoom. */
+export interface HandFrame {
+  /** Index fingertip position, normalized 0-1 in the raw (unmirrored) camera frame. */
+  indexX: number
+  indexY: number
+  /** Normalized thumb-to-index and thumb-to-middle fingertip distances, for left/right-click. */
+  thumbIndexDist: number
+  thumbMiddleDist: number
+  /** How "open" the hand is right now (normalized) and the palm's vertical position — together
+   *  drive the zoom gesture. */
+  spread: number
+  palmY: number
+}
+
 export type VoiceSessionState = 'idle' | 'listening' | 'speaking' | 'connecting' | 'error'
 
 export type VoiceEvent =

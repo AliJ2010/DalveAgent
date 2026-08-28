@@ -4,6 +4,7 @@ import type {
   AgentConfig,
   AutonomousTaskEvent,
   ComposioCatalogEntry,
+  HandFrame,
   ScreenControlEvent,
   SettingsState,
   VoiceEvent
@@ -133,8 +134,7 @@ const dalveApi = {
   },
   handTracking: {
     stop: (): Promise<{ status: 'SUCCESS'; message: string }> => ipcRenderer.invoke('handTracking:stop'),
-    sendFrame: (x: number, y: number, pinching: boolean): void =>
-      ipcRenderer.send('handTracking:frame', x, y, pinching),
+    sendFrame: (frame: HandFrame): void => ipcRenderer.send('handTracking:frame', frame),
     onStart: (callback: () => void): (() => void) => {
       const listener = (): void => callback()
       ipcRenderer.on('handTracking:start', listener)

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { HandLandmarker, FilesetResolver } from '@mediapipe/tasks-vision'
+import { HandLandmarker, FilesetResolver, type NormalizedLandmark } from '@mediapipe/tasks-vision'
 import { Hand, Square } from 'lucide-react'
 
 // Pinned to the exact installed @mediapipe/tasks-vision version — jsdelivr serves each version
@@ -8,23 +8,42 @@ import { Hand, Square } from 'lucide-react'
 const WASM_BASE = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm'
 const MODEL_URL =
   'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task'
-// Normalized (0-1, relative to hand size in frame) distance between thumb and index fingertip
-// below which it counts as a pinch — picked as a reasonable middle ground, not measured against
-// a real hand (no camera available to tune it against here).
-const PINCH_THRESHOLD = 0.06
+
+// Hand landmark indices (MediaPipe's fixed 21-point hand model).
+const WRIST = 0
+const THUMB_TIP = 4
+const INDEX_TIP = 8
+const MIDDLE_TIP = 12
+const RING_TIP = 16
+const PINKY_TIP = 20
+
+function dist(a: NormalizedLandmark, b: NormalizedLandmark): number {
+  const dx = a.x - b.x
+  const dy = a.y - b.y
+  return Math.sqrt(dx * dx + dy * dy)
+}
+
+/** Average fingertip-to-wrist distance across the four non-thumb fingers — a "how open is the
+ *  hand" signal that's robust to which specific finger moves, unlike a single two-point measure. */
+function computeSpread(hand: NormalizedLandmark[]): number {
+  const wrist = hand[WRIST]
+  const tips = [INDEX_TIP, MIDDLE_TIP, RING_TIP, PINKY_TIP]
+  return tips.reduce((sum, i) => sum + dist(wrist, hand[i]), 0) / tips.length
+}
 
 /**
- * Webcam hand-tracking cursor — invisible by default (just a hidden <video> element and a status
- * banner when active), turned on/off by voice via handTracking.ts in the main process. Camera
- * capture and MediaPipe's hand-landmark inference both have to happen here, not in the main
- * process — getUserMedia and WebAssembly vision models are browser-standard APIs with no main-
- * process equivalent in Electron. Every detected frame's index-fingertip position and pinch state
- * gets sent to the main process over IPC, which is what actually moves the OS cursor.
+ * Webcam hand-tracking cursor — invisible until turned on by voice, then shows a small live
+ * camera preview with the tracked hand's skeleton drawn over it (purely for the user to see what
+ * DALVE sees; all actual cursor/click/zoom decisions happen in the main process from the raw
+ * per-frame geometry this sends over IPC). Camera capture and MediaPipe's hand-landmark inference
+ * both have to happen here, not in the main process — getUserMedia and WebAssembly vision models
+ * are browser-standard APIs with no main-process equivalent in Electron.
  */
 export function HandTrackingController(): React.JSX.Element {
   const [active, setActive] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const landmarkerRef = useRef<HandLandmarker | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const rafRef = useRef<number | null>(null)
@@ -74,20 +93,67 @@ export function HandTrackingController(): React.JSX.Element {
     }
   }
 
+  function drawPreview(hand: NormalizedLandmark[] | undefined, video: HTMLVideoElement, pinchIndex: number, pinchMiddle: number): void {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+
+    ctx.save()
+    // Mirror the whole draw so the preview reads like looking in a mirror — matching the same
+    // mirrored convention the actual cursor-mapping in the main process uses, so what the user
+    // sees here lines up with how their hand actually controls the cursor.
+    ctx.translate(canvas.width, 0)
+    ctx.scale(-1, 1)
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+
+    if (hand) {
+      ctx.strokeStyle = 'rgba(212, 175, 55, 0.8)'
+      ctx.lineWidth = 2
+      for (const { start, end } of HandLandmarker.HAND_CONNECTIONS) {
+        const a = hand[start]
+        const b = hand[end]
+        ctx.beginPath()
+        ctx.moveTo(a.x * canvas.width, a.y * canvas.height)
+        ctx.lineTo(b.x * canvas.width, b.y * canvas.height)
+        ctx.stroke()
+      }
+      hand.forEach((pt, i) => {
+        // Green when that finger's pinch is engaged — real visual confirmation of exactly when a
+        // click registers, not just a generic skeleton overlay.
+        const isIndexTip = i === INDEX_TIP
+        const isMiddleTip = i === MIDDLE_TIP
+        const engaged = (isIndexTip && pinchIndex < 0.06) || (isMiddleTip && pinchMiddle < 0.06)
+        ctx.fillStyle = engaged ? '#6fe08a' : '#f2d06b'
+        ctx.beginPath()
+        ctx.arc(pt.x * canvas.width, pt.y * canvas.height, isIndexTip || isMiddleTip ? 5 : 3, 0, Math.PI * 2)
+        ctx.fill()
+      })
+    }
+    ctx.restore()
+  }
+
   function loop(landmarker: HandLandmarker, video: HTMLVideoElement): void {
     const detect = (): void => {
       if (!runningRef.current) return
       if (video.readyState >= 2) {
         const result = landmarker.detectForVideo(video, performance.now())
         const hand = result.landmarks[0]
+        let pinchIndex = 1
+        let pinchMiddle = 1
         if (hand) {
-          const indexTip = hand[8]
-          const thumbTip = hand[4]
-          const dx = indexTip.x - thumbTip.x
-          const dy = indexTip.y - thumbTip.y
-          const pinching = Math.sqrt(dx * dx + dy * dy) < PINCH_THRESHOLD
-          window.dalve.handTracking.sendFrame(indexTip.x, indexTip.y, pinching)
+          pinchIndex = dist(hand[THUMB_TIP], hand[INDEX_TIP])
+          pinchMiddle = dist(hand[THUMB_TIP], hand[MIDDLE_TIP])
+          window.dalve.handTracking.sendFrame({
+            indexX: hand[INDEX_TIP].x,
+            indexY: hand[INDEX_TIP].y,
+            thumbIndexDist: pinchIndex,
+            thumbMiddleDist: pinchMiddle,
+            spread: computeSpread(hand),
+            palmY: hand[WRIST].y
+          })
         }
+        drawPreview(hand, video, pinchIndex, pinchMiddle)
       }
       rafRef.current = requestAnimationFrame(detect)
     }
@@ -127,7 +193,9 @@ export function HandTrackingController(): React.JSX.Element {
         >
           <Hand size={14} color={error ? '#e05a5a' : 'var(--c-gold-bright)'} />
           <span className="tracked-label" style={{ color: 'var(--c-text-1)', fontSize: 11 }}>
-            {error ? `HAND TRACKING FAILED: ${error}` : 'HAND TRACKING ACTIVE — PINCH TO CLICK'}
+            {error
+              ? `HAND TRACKING FAILED: ${error}`
+              : 'HAND TRACKING ACTIVE — PINCH THUMB+INDEX TO CLICK, THUMB+MIDDLE TO RIGHT-CLICK'}
           </span>
           {active && (
             <button
@@ -149,6 +217,22 @@ export function HandTrackingController(): React.JSX.Element {
               STOP
             </button>
           )}
+        </div>
+      )}
+      {active && (
+        <div
+          style={{
+            position: 'fixed',
+            bottom: 20,
+            left: 20,
+            zIndex: 99,
+            borderRadius: 12,
+            overflow: 'hidden',
+            border: '1px solid var(--c-gold)',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.4)'
+          }}
+        >
+          <canvas ref={canvasRef} width={240} height={180} style={{ display: 'block' }} />
         </div>
       )}
     </>

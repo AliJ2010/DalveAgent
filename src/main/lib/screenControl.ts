@@ -260,8 +260,25 @@ export function setCursorPositionAbsolute(x: number, y: number): void {
 
 /** Same "the human is the actual actor" reasoning as setCursorPositionAbsolute — a pinch gesture
  *  is the user's own physical click, not an AI decision, so this isn't gated either. */
-export function clickAtCurrentPosition(): void {
-  getRobot().mouseClick('left')
+export function clickAtCurrentPosition(button: 'left' | 'right' = 'left'): void {
+  getRobot().mouseClick(button)
+}
+
+/**
+ * Ctrl+scroll at the current cursor position — the standard cross-app zoom gesture (browsers,
+ * most image/PDF viewers, many creative apps, Windows desktop icon size). Used by handTracking.ts
+ * for the open/close-while-moving-vertically zoom gesture; same "the user's own gesture is the
+ * actual actor" reasoning as the cursor/click functions above, so this isn't gated either.
+ * Positive notches zooms in, negative zooms out.
+ */
+export function zoomAtCurrentPosition(notches: number): void {
+  const r = getRobot()
+  r.keyToggle('control', 'down')
+  try {
+    r.scrollMouse(0, notches)
+  } finally {
+    r.keyToggle('control', 'up')
+  }
 }
 
 export async function clickMouse(
