@@ -33,6 +33,10 @@ const dalveApi = {
       ipcRenderer.invoke('settings:setVoiceEngine', engine),
     listElevenLabsVoices: (): Promise<{ voiceId: string; name: string; category?: string }[]> =>
       ipcRenderer.invoke('settings:listElevenLabsVoices'),
+    addElevenLabsCustomVoice: (voiceId: string, name: string): Promise<SettingsState> =>
+      ipcRenderer.invoke('settings:addElevenLabsCustomVoice', voiceId, name),
+    removeElevenLabsCustomVoice: (voiceId: string): Promise<SettingsState> =>
+      ipcRenderer.invoke('settings:removeElevenLabsCustomVoice', voiceId),
     setComposioKey: (key: string): Promise<SettingsState> =>
       ipcRenderer.invoke('settings:setComposioKey', key),
     setDalveVoice: (voice: string): Promise<SettingsState> =>

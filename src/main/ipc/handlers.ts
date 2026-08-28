@@ -57,6 +57,16 @@ export function registerIpcHandlers(): void {
     return settingsStore.getState()
   })
 
+  // Lets a voice be added by ID directly — needed for shared/library ElevenLabs voices that
+  // never show up via /v2/voices for this account but are still usable for TTS by id.
+  ipcMain.handle('settings:addElevenLabsCustomVoice', (_e, voiceId: string, name: string) => {
+    return settingsStore.addElevenLabsCustomVoice(voiceId, name)
+  })
+
+  ipcMain.handle('settings:removeElevenLabsCustomVoice', (_e, voiceId: string) => {
+    return settingsStore.removeElevenLabsCustomVoice(voiceId)
+  })
+
   // Real ElevenLabs voice list, fetched with whatever key is currently saved — lets the Settings
   // screen offer an actual picker instead of asking the user to paste a raw voice ID by hand.
   ipcMain.handle('settings:listElevenLabsVoices', async () => {

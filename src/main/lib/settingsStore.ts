@@ -36,6 +36,9 @@ interface StoredSecrets {
   elevenLabsApiKey?: string // base64-encoded, safeStorage-encrypted
   elevenLabsVoiceId?: string
   elevenLabsVoiceName?: string
+  /** Hand-added voices (e.g. a shared-library voice ElevenLabs' /v2/voices won't list under this
+   *  account) — merged into the pickable list alongside whatever the API actually returns. */
+  elevenLabsCustomVoices: { voiceId: string; name: string }[]
   /** Which engine powers the live voice session — kept alongside Gemini (not a replacement) so a
    *  problem with the new cascade never leaves the user with no working voice option at all. */
   voiceEngine: 'gemini' | 'groq'
@@ -53,6 +56,9 @@ function defaultStore(): StoredSecrets {
     dalveVoice: 'Kore',
     dalveMemory: '',
     mcpOAuthState: {},
+    // Seeded per explicit request — a shared-library ElevenLabs voice the user picked that
+    // doesn't show up via /v2/voices for their account.
+    elevenLabsCustomVoices: [{ voiceId: 'wDsJlOXPqcvIUKdLXjDs', name: 'Jarvis' }],
     voiceEngine: 'gemini'
   }
 }
@@ -163,6 +169,7 @@ class SettingsStore {
       elevenLabsApiKeySet: !!this.data.elevenLabsApiKey,
       elevenLabsVoiceId: this.data.elevenLabsVoiceId,
       elevenLabsVoiceName: this.data.elevenLabsVoiceName,
+      elevenLabsCustomVoices: this.data.elevenLabsCustomVoices,
       voiceEngine: this.data.voiceEngine
     }
   }
@@ -271,6 +278,22 @@ class SettingsStore {
     this.data.elevenLabsVoiceName = voiceName
     this.persist()
     this.notifyChange()
+  }
+
+  addElevenLabsCustomVoice(voiceId: string, name: string): SettingsState {
+    if (!this.data.elevenLabsCustomVoices.some((v) => v.voiceId === voiceId)) {
+      this.data.elevenLabsCustomVoices.push({ voiceId, name })
+      this.persist()
+      this.notifyChange()
+    }
+    return this.getState()
+  }
+
+  removeElevenLabsCustomVoice(voiceId: string): SettingsState {
+    this.data.elevenLabsCustomVoices = this.data.elevenLabsCustomVoices.filter((v) => v.voiceId !== voiceId)
+    this.persist()
+    this.notifyChange()
+    return this.getState()
   }
 
   setVoiceEngine(engine: 'gemini' | 'groq'): void {

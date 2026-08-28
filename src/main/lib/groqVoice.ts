@@ -303,7 +303,10 @@ async function runTurn(userText: string): Promise<void> {
 async function speak(text: string): Promise<void> {
   emit({ type: 'outputTranscript', text, finished: true })
   const apiKey = settingsStore.getElevenLabsApiKey()
-  const voiceId = settingsStore.getState().elevenLabsVoiceId
+  // A per-agent voice (set in that agent's Voice tab) wins over the global default — otherwise
+  // every agent sounds identical under this engine, which defeats the point of having several.
+  const agentVoiceId = activeAgentId ? agentStore.get(activeAgentId)?.elevenLabsVoiceId : undefined
+  const voiceId = agentVoiceId ?? settingsStore.getState().elevenLabsVoiceId
   if (!apiKey || !voiceId) {
     log.info('[groqVoice] no ElevenLabs key/voice configured — replying as text only')
     return

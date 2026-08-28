@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Trash2 } from 'lucide-react'
 import { useSettingsStore } from '../state/settingsStore'
 import { useUiStore } from '../state/uiStore'
@@ -14,8 +14,11 @@ export function SettingsScreen(): React.JSX.Element {
   const setGroqKey = useSettingsStore((s) => s.setGroqKey)
   const setElevenLabsKey = useSettingsStore((s) => s.setElevenLabsKey)
   const setElevenLabsVoice = useSettingsStore((s) => s.setElevenLabsVoice)
+  const addElevenLabsCustomVoice = useSettingsStore((s) => s.addElevenLabsCustomVoice)
+  const removeElevenLabsCustomVoice = useSettingsStore((s) => s.removeElevenLabsCustomVoice)
   const setVoiceEngine = useSettingsStore((s) => s.setVoiceEngine)
   const elevenLabsVoices = useSettingsStore((s) => s.elevenLabsVoices)
+  const elevenLabsVoicesError = useSettingsStore((s) => s.elevenLabsVoicesError)
   const loadElevenLabsVoices = useSettingsStore((s) => s.loadElevenLabsVoices)
   const setComposioKey = useSettingsStore((s) => s.setComposioKey)
   const setDalveVoice = useSettingsStore((s) => s.setDalveVoice)
@@ -31,6 +34,8 @@ export function SettingsScreen(): React.JSX.Element {
   const [telegramInput, setTelegramInput] = useState('')
   const [groqInput, setGroqInput] = useState('')
   const [elevenLabsInput, setElevenLabsInput] = useState('')
+  const [customVoiceIdInput, setCustomVoiceIdInput] = useState('')
+  const [customVoiceNameInput, setCustomVoiceNameInput] = useState('')
   const [composioInput, setComposioInput] = useState('')
   const [composioError, setComposioError] = useState<string | null>(null)
   const [savedNotice, setSavedNotice] = useState<string | null>(null)
@@ -88,7 +93,28 @@ export function SettingsScreen(): React.JSX.Element {
     await setElevenLabsKey(elevenLabsInput.trim())
     setElevenLabsInput('')
     flash('ElevenLabs API key saved')
-    void loadElevenLabsVoices()
+    void loadElevenLabsVoices(true)
+  }
+
+  // Fetched account voices plus hand-added ones (e.g. a shared-library voice /v2/voices won't
+  // list for this account) — deduped so a voice that ends up in both places shows once.
+  const allElevenLabsVoices = useMemo(() => {
+    const custom = settings?.elevenLabsCustomVoices ?? []
+    const merged = [...elevenLabsVoices]
+    for (const v of custom) {
+      if (!merged.some((existing) => existing.voiceId === v.voiceId)) merged.push(v)
+    }
+    return merged
+  }, [elevenLabsVoices, settings?.elevenLabsCustomVoices])
+
+  async function saveCustomVoice(): Promise<void> {
+    const voiceId = customVoiceIdInput.trim()
+    const name = customVoiceNameInput.trim()
+    if (!voiceId || !name) return
+    await addElevenLabsCustomVoice(voiceId, name)
+    setCustomVoiceIdInput('')
+    setCustomVoiceNameInput('')
+    flash(`Added "${name}" to your voice list`)
   }
 
   async function saveComposio(): Promise<void> {
@@ -254,11 +280,42 @@ export function SettingsScreen(): React.JSX.Element {
             onSubmit={saveElevenLabs}
             saved={settings?.elevenLabsApiKeySet}
           />
+          {settings?.elevenLabsApiKeySet && elevenLabsVoicesError && (
+            <div
+              style={{
+                marginTop: 8,
+                padding: '10px 12px',
+                borderRadius: 8,
+                background: 'rgba(255,80,80,0.08)',
+                border: '1px solid rgba(255,80,80,0.3)',
+                fontSize: 12,
+                color: 'var(--c-text-1)'
+              }}
+            >
+              Couldn't load voices: {elevenLabsVoicesError}
+              <button
+                onClick={() => void loadElevenLabsVoices(true)}
+                style={{
+                  display: 'block',
+                  marginTop: 6,
+                  background: 'transparent',
+                  border: '1px solid var(--c-panel-border)',
+                  borderRadius: 6,
+                  padding: '4px 10px',
+                  color: 'var(--c-text-1)',
+                  fontSize: 12,
+                  cursor: 'pointer'
+                }}
+              >
+                Retry
+              </button>
+            </div>
+          )}
           {settings?.elevenLabsApiKeySet && (
             <select
               value={settings.elevenLabsVoiceId ?? ''}
               onChange={(e) => {
-                const voice = elevenLabsVoices.find((v) => v.voiceId === e.target.value)
+                const voice = allElevenLabsVoices.find((v) => v.voiceId === e.target.value)
                 if (voice) void setElevenLabsVoice(voice.voiceId, voice.name)
               }}
               style={{
@@ -273,9 +330,9 @@ export function SettingsScreen(): React.JSX.Element {
               }}
             >
               <option value="" disabled>
-                {elevenLabsVoices.length === 0 ? 'Loading voices…' : 'Choose a voice'}
+                {allElevenLabsVoices.length === 0 ? 'Loading voices…' : 'Choose a voice'}
               </option>
-              {elevenLabsVoices.map((v) => (
+              {allElevenLabsVoices.map((v) => (
                 <option key={v.voiceId} value={v.voiceId}>
                   {v.name}
                   {v.category ? ` (${v.category})` : ''}
@@ -284,8 +341,86 @@ export function SettingsScreen(): React.JSX.Element {
             </select>
           )}
           <p style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 6 }}>
-            Used to speak DALVE's replies when the voice engine above is set to Groq.
+            Used to speak DALVE's replies when the voice engine above is set to Groq. Each agent can
+            override this with its own voice from its Voice tab.
           </p>
+
+          {settings?.elevenLabsApiKeySet && (
+            <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--c-panel-border)' }}>
+              <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginBottom: 8 }}>
+                Add a voice by ID (for shared/library voices the list above won't show)
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input
+                  value={customVoiceIdInput}
+                  onChange={(e) => setCustomVoiceIdInput(e.target.value)}
+                  placeholder="Voice ID"
+                  style={{
+                    flex: 1,
+                    background: 'rgba(255,255,255,0.04)',
+                    border: '1px solid var(--c-panel-border)',
+                    borderRadius: 8,
+                    padding: '8px 10px',
+                    color: 'var(--c-text-1)',
+                    fontSize: 12
+                  }}
+                />
+                <input
+                  value={customVoiceNameInput}
+                  onChange={(e) => setCustomVoiceNameInput(e.target.value)}
+                  placeholder="Name"
+                  style={{
+                    width: 120,
+                    background: 'rgba(255,255,255,0.04)',
+                    border: '1px solid var(--c-panel-border)',
+                    borderRadius: 8,
+                    padding: '8px 10px',
+                    color: 'var(--c-text-1)',
+                    fontSize: 12
+                  }}
+                />
+                <button
+                  onClick={saveCustomVoice}
+                  style={{
+                    background: 'var(--c-gold)',
+                    border: 'none',
+                    borderRadius: 8,
+                    padding: '8px 14px',
+                    color: '#1a1305',
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: 'pointer'
+                  }}
+                >
+                  Add
+                </button>
+              </div>
+              {(settings.elevenLabsCustomVoices ?? []).length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 10 }}>
+                  {settings.elevenLabsCustomVoices.map((v) => (
+                    <div
+                      key={v.voiceId}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        fontSize: 12,
+                        color: 'var(--c-text-2)'
+                      }}
+                    >
+                      <span>{v.name} <span style={{ color: 'var(--c-text-3)' }}>({v.voiceId})</span></span>
+                      <button
+                        onClick={() => void removeElevenLabsCustomVoice(v.voiceId)}
+                        style={{ background: 'transparent', border: 'none', color: 'var(--c-text-3)', cursor: 'pointer' }}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </Section>
 
         <Section title="Composio API key">

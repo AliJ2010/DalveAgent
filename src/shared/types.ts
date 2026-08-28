@@ -15,6 +15,10 @@ export interface AgentConfig {
   toolScope: string[] // Composio action ids / MCP tool ids this agent may use
   memory: string // persistent free-text notes, scoped to this agent
   voice: string // Gemini Live voice name
+  /** Per-agent override for the Groq+ElevenLabs engine — undefined means "use the global default
+   *  voice from Settings" rather than every agent sounding identical under that engine. */
+  elevenLabsVoiceId?: string
+  elevenLabsVoiceName?: string
   status: AgentStatus
   archived: boolean
   createdAt: number
@@ -93,6 +97,9 @@ export interface SettingsState {
   elevenLabsApiKeySet: boolean
   elevenLabsVoiceId?: string
   elevenLabsVoiceName?: string
+  /** Voices added by hand (e.g. a shared/library voice ElevenLabs' own API won't list under this
+   *  account) so they still show up as pickable options alongside the ones fetched from /v2/voices. */
+  elevenLabsCustomVoices: { voiceId: string; name: string }[]
   voiceEngine: 'gemini' | 'groq'
 }
 

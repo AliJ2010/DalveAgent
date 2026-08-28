@@ -11,9 +11,12 @@ interface SettingsStoreState {
   setGroqKey: (key: string) => Promise<void>
   setElevenLabsKey: (key: string) => Promise<void>
   setElevenLabsVoice: (voiceId: string, voiceName: string) => Promise<void>
+  addElevenLabsCustomVoice: (voiceId: string, name: string) => Promise<void>
+  removeElevenLabsCustomVoice: (voiceId: string) => Promise<void>
   setVoiceEngine: (engine: 'gemini' | 'groq') => Promise<void>
   elevenLabsVoices: { voiceId: string; name: string; category?: string }[]
-  loadElevenLabsVoices: () => Promise<void>
+  elevenLabsVoicesError: string | null
+  loadElevenLabsVoices: (force?: boolean) => Promise<void>
   setComposioKey: (key: string) => Promise<void>
   setDalveVoice: (voice: string) => Promise<void>
   setDalveMemory: (memory: string) => Promise<void>
@@ -48,6 +51,7 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
   catalogLoading: false,
   catalogError: null,
   elevenLabsVoices: [],
+  elevenLabsVoicesError: null,
 
   refresh: async () => {
     set({ loading: true })
@@ -85,18 +89,31 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
     set({ settings })
   },
 
+  addElevenLabsCustomVoice: async (voiceId, name) => {
+    const settings = await window.dalve.settings.addElevenLabsCustomVoice(voiceId, name)
+    set({ settings })
+  },
+
+  removeElevenLabsCustomVoice: async (voiceId) => {
+    const settings = await window.dalve.settings.removeElevenLabsCustomVoice(voiceId)
+    set({ settings })
+  },
+
   setVoiceEngine: async (engine) => {
     const settings = await window.dalve.settings.setVoiceEngine(engine)
     set({ settings })
   },
 
-  loadElevenLabsVoices: async () => {
-    if (get().elevenLabsVoices.length > 0) return
+  loadElevenLabsVoices: async (force = false) => {
+    if (!force && get().elevenLabsVoices.length > 0) return
+    set({ elevenLabsVoicesError: null })
     try {
       const voices = await window.dalve.settings.listElevenLabsVoices()
       set({ elevenLabsVoices: voices })
     } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to load voices.'
       console.error('[settings] failed to load ElevenLabs voices:', err)
+      set({ elevenLabsVoicesError: message })
     }
   },
 

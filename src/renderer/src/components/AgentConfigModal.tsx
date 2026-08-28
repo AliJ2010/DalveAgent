@@ -20,6 +20,8 @@ export function AgentConfigModal(): React.JSX.Element | null {
   const agents = useAgentsStore((s) => s.agents)
   const update = useAgentsStore((s) => s.update)
   const settings = useSettingsStore((s) => s.settings)
+  const elevenLabsVoices = useSettingsStore((s) => s.elevenLabsVoices)
+  const loadElevenLabsVoices = useSettingsStore((s) => s.loadElevenLabsVoices)
 
   const agent = agents.find((a) => a.id === selectedAgentId)
   const [tab, setTab] = useState<Tab>('Prompt & Identity')
@@ -47,6 +49,19 @@ export function AgentConfigModal(): React.JSX.Element | null {
     const t = setTimeout(() => update(agent.id, { memory }), 600)
     return () => clearTimeout(t)
   }, [memory, agent, update])
+
+  useEffect(() => {
+    if (settings?.elevenLabsApiKeySet) void loadElevenLabsVoices()
+  }, [settings?.elevenLabsApiKeySet, loadElevenLabsVoices])
+
+  const allElevenLabsVoices = useMemo(() => {
+    const custom = settings?.elevenLabsCustomVoices ?? []
+    const merged = [...elevenLabsVoices]
+    for (const v of custom) {
+      if (!merged.some((existing) => existing.voiceId === v.voiceId)) merged.push(v)
+    }
+    return merged
+  }, [elevenLabsVoices, settings?.elevenLabsCustomVoices])
 
   const availableSkills = useMemo(() => {
     const composio = PRIORITY_COMPOSIO_APPS.map((a) => `composio:${a.key}`)
@@ -283,32 +298,79 @@ export function AgentConfigModal(): React.JSX.Element | null {
           )}
 
           {tab === 'Voice' && (
-            <div>
-              <div className="tracked-label" style={{ color: 'var(--c-gold)', marginBottom: 8 }}>
-                Voice
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
+              <div>
+                <div className="tracked-label" style={{ color: 'var(--c-gold)', marginBottom: 8 }}>
+                  Gemini Live voice
+                </div>
+                <select
+                  value={agent.voice}
+                  onChange={(e) => update(agent.id, { voice: e.target.value })}
+                  style={{
+                    width: '100%',
+                    background: 'rgba(255,255,255,0.04)',
+                    border: '1px solid var(--c-panel-border)',
+                    borderRadius: 8,
+                    padding: '10px 12px',
+                    color: 'var(--c-text-1)',
+                    fontSize: 13
+                  }}
+                >
+                  {GEMINI_VOICES.map((v) => (
+                    <option key={v} value={v}>
+                      {v}
+                    </option>
+                  ))}
+                </select>
+                <p style={{ fontSize: 12, color: 'var(--c-text-3)', marginTop: 10 }}>
+                  Used when relaying this agent's work out loud while the voice engine is set to Gemini.
+                </p>
               </div>
-              <select
-                value={agent.voice}
-                onChange={(e) => update(agent.id, { voice: e.target.value })}
-                style={{
-                  width: '100%',
-                  background: 'rgba(255,255,255,0.04)',
-                  border: '1px solid var(--c-panel-border)',
-                  borderRadius: 8,
-                  padding: '10px 12px',
-                  color: 'var(--c-text-1)',
-                  fontSize: 13
-                }}
-              >
-                {GEMINI_VOICES.map((v) => (
-                  <option key={v} value={v}>
-                    {v}
-                  </option>
-                ))}
-              </select>
-              <p style={{ fontSize: 12, color: 'var(--c-text-3)', marginTop: 10 }}>
-                DALVE uses this voice when relaying this agent's work out loud.
-              </p>
+
+              <div>
+                <div className="tracked-label" style={{ color: 'var(--c-gold)', marginBottom: 8 }}>
+                  Groq + ElevenLabs voice
+                </div>
+                {settings?.elevenLabsApiKeySet ? (
+                  <select
+                    value={agent.elevenLabsVoiceId ?? ''}
+                    onChange={(e) => {
+                      if (!e.target.value) {
+                        update(agent.id, { elevenLabsVoiceId: undefined, elevenLabsVoiceName: undefined })
+                        return
+                      }
+                      const voice = allElevenLabsVoices.find((v) => v.voiceId === e.target.value)
+                      if (voice) {
+                        update(agent.id, { elevenLabsVoiceId: voice.voiceId, elevenLabsVoiceName: voice.name })
+                      }
+                    }}
+                    style={{
+                      width: '100%',
+                      background: 'rgba(255,255,255,0.04)',
+                      border: '1px solid var(--c-panel-border)',
+                      borderRadius: 8,
+                      padding: '10px 12px',
+                      color: 'var(--c-text-1)',
+                      fontSize: 13
+                    }}
+                  >
+                    <option value="">Use global default{settings.elevenLabsVoiceName ? ` (${settings.elevenLabsVoiceName})` : ''}</option>
+                    {allElevenLabsVoices.map((v) => (
+                      <option key={v.voiceId} value={v.voiceId}>
+                        {v.name}
+                        {v.category ? ` (${v.category})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <p style={{ fontSize: 12, color: 'var(--c-text-3)' }}>
+                    Add an ElevenLabs API key in Settings to give this agent its own voice.
+                  </p>
+                )}
+                <p style={{ fontSize: 12, color: 'var(--c-text-3)', marginTop: 10 }}>
+                  Used instead of the global default while the voice engine is set to Groq.
+                </p>
+              </div>
             </div>
           )}
         </div>
