@@ -1,8 +1,24 @@
 import { app, shell, BrowserWindow, ipcMain, session, Tray, Menu, nativeImage, screen, globalShortcut } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import log from 'electron-log/main'
 import icon from '../../resources/icon.png?asset'
 import { registerIpcHandlers } from './ipc/handlers'
+
+// Node's default behavior for an uncaught exception or unhandled promise rejection is to
+// terminate the ENTIRE process — confirmed live: signing in crashed the whole app outright
+// (not a hang, not an error message, the whole window just closed), almost certainly an
+// unhandled error event from Supabase's realtime WebSocket connection during a period of real
+// service instability (the same window where its own token-refresh endpoint was found hanging
+// indefinitely). One flaky network event from a third-party service should never be able to take
+// the whole app down — log it and keep running, exactly like a web browser tab surviving a script
+// error instead of the whole browser closing.
+process.on('uncaughtException', (err) => {
+  log.error('[main] uncaughtException (kept the app alive):', err instanceof Error ? err.stack : err)
+})
+process.on('unhandledRejection', (reason) => {
+  log.error('[main] unhandledRejection (kept the app alive):', reason instanceof Error ? reason.stack : reason)
+})
 import { attachWindow, stopVoiceSession } from './lib/geminiLive'
 import { attachWindow as attachScreenControlWindow, stopAll as stopScreenControl } from './lib/screenControl'
 import { attachWindow as attachAutonomousTaskWindow, stopAutonomousTask } from './lib/autonomousTask'

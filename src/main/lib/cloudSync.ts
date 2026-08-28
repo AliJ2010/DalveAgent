@@ -76,10 +76,14 @@ export function isSignedIn(): boolean {
   return currentUserId !== null
 }
 
-/** Called at app startup — resumes an existing session (Supabase persists it locally between
- *  launches) and re-establishes sync, so the user doesn't have to sign in every single time. */
-export async function getCurrentSession(): Promise<{ signedIn: boolean; email?: string }> {
-  if (!isSupabaseConfigured()) return { signedIn: false }
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms))
+  ])
+}
+
+async function getCurrentSessionInner(): Promise<{ signedIn: boolean; email?: string }> {
   const { data } = await getClient().auth.getSession()
   if (data.session) {
     currentUserId = data.session.user.id
@@ -89,7 +93,31 @@ export async function getCurrentSession(): Promise<{ signedIn: boolean; email?: 
   return { signedIn: false }
 }
 
-export async function signUp(email: string, password: string): Promise<{ error?: string }> {
+/**
+ * Called at app startup — resumes an existing session (Supabase persists it locally between
+ * launches) and re-establishes sync, so the user doesn't have to sign in every single time.
+ *
+ * Wrapped in an overall timeout: confirmed live that Supabase's own token-refresh endpoint can
+ * hang indefinitely (never responds, doesn't error) for a specific expired-token request — and
+ * since App.tsx blocks on this at startup before rendering anything, an unbounded hang here
+ * bricks the entire app on a black screen with no way to recover short of clearing local auth
+ * state by hand. A real service hiccup should cost the user one "sign in again," never a stuck
+ * app — worse case if this fires spuriously is an extra sign-in, not a black screen.
+ */
+export async function getCurrentSession(): Promise<{ signedIn: boolean; email?: string }> {
+  if (!isSupabaseConfigured()) return { signedIn: false }
+  try {
+    return await withTimeout(getCurrentSessionInner(), 10000, 'Cloud sign-in check')
+  } catch (err) {
+    console.error('[cloudSync] getCurrentSession failed or timed out — proceeding as signed out:', err)
+    return { signedIn: false }
+  }
+}
+
+// Same reasoning and timeout as getCurrentSession — a Supabase hiccup during an explicit sign-in
+// attempt should surface as an error the user can retry, never an indefinite hang or (via
+// onSignedIn's realtime channel setup) an unhandled error that takes the whole app down.
+async function signUpInner(email: string, password: string): Promise<{ error?: string }> {
   const { data, error } = await getClient().auth.signUp({ email, password })
   if (error) return { error: error.message }
   if (data.session) {
@@ -99,12 +127,30 @@ export async function signUp(email: string, password: string): Promise<{ error?:
   return {}
 }
 
-export async function signIn(email: string, password: string): Promise<{ error?: string }> {
+export async function signUp(email: string, password: string): Promise<{ error?: string }> {
+  try {
+    return await withTimeout(signUpInner(email, password), 15000, 'Sign up')
+  } catch (err) {
+    console.error('[cloudSync] signUp failed or timed out:', err)
+    return { error: err instanceof Error ? err.message : 'Sign up timed out — try again.' }
+  }
+}
+
+async function signInInner(email: string, password: string): Promise<{ error?: string }> {
   const { data, error } = await getClient().auth.signInWithPassword({ email, password })
   if (error) return { error: error.message }
   currentUserId = data.session.user.id
   await onSignedIn()
   return {}
+}
+
+export async function signIn(email: string, password: string): Promise<{ error?: string }> {
+  try {
+    return await withTimeout(signInInner(email, password), 15000, 'Sign in')
+  } catch (err) {
+    console.error('[cloudSync] signIn failed or timed out:', err)
+    return { error: err instanceof Error ? err.message : 'Sign in timed out — try again.' }
+  }
 }
 
 export async function signOut(): Promise<void> {
@@ -323,7 +369,15 @@ async function onSignedIn(): Promise<void> {
         })
       }
     )
-    .subscribe()
+    .subscribe((status, err) => {
+      // Was previously called with no callback at all — any connection error from Supabase's
+      // realtime service (confirmed live: their service was genuinely unstable in the same
+      // window this was found) had nowhere to go. Logging it here doesn't fix a flaky
+      // connection, but real-time cross-device sync failing quietly is a much better outcome
+      // than it (or something lower-level it triggers) taking the whole app down.
+      if (err) console.error('[cloudSync] realtime channel error:', err)
+      else console.log('[cloudSync] realtime channel status:', status)
+    })
 }
 
 /** Journal sync runs on a simpler pull/push basis (not realtime) since it's append-mostly and
