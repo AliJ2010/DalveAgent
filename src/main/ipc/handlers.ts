@@ -8,6 +8,7 @@ import * as screenControl from '../lib/screenControl'
 import * as autonomousTask from '../lib/autonomousTask'
 import * as cloudSync from '../lib/cloudSync'
 import * as handTracking from '../lib/handTracking'
+import * as mcpClient from '../lib/mcpClient'
 import type { AgentConfig } from '@shared/types'
 
 export function registerIpcHandlers(): void {
@@ -158,11 +159,19 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     'settings:addMcpServer',
-    (_e, server: { name: string; url: string; authHeader?: string; authToken?: string }) =>
-      settingsStore.addMcpServer(server)
+    async (_e, server: { name: string; url: string; authHeader?: string; authToken?: string }) => {
+      const state = settingsStore.addMcpServer(server)
+      const added = state.mcpServers[state.mcpServers.length - 1]
+      const config = settingsStore.getMcpServerConfigs().find((s) => s.id === added.id)
+      if (config) void mcpClient.connectServer(config) // connects async — Settings reflects the real result once it resolves, not a guess made here
+      return state
+    }
   )
 
-  ipcMain.handle('settings:removeMcpServer', (_e, id: string) => settingsStore.removeMcpServer(id))
+  ipcMain.handle('settings:removeMcpServer', (_e, id: string) => {
+    mcpClient.disconnectServer(id)
+    return settingsStore.removeMcpServer(id)
+  })
 
   ipcMain.handle('shell:openExternal', (_e, url: string) => shell.openExternal(url))
 

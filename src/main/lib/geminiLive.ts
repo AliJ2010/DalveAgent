@@ -17,6 +17,7 @@ import * as appControl from './appControl'
 import * as windowLayout from './windowLayout'
 import * as priceAxis from './priceAxis'
 import * as handTracking from './handTracking'
+import * as mcpClient from './mcpClient'
 import * as uiAutomation from './uiAutomation'
 import * as ocr from './ocr'
 import * as gridTargeting from './gridTargeting'
@@ -600,6 +601,8 @@ async function buildToolsForAgent(agent: AgentConfig | null): Promise<Tool[]> {
     }
   }
 
+  functionDeclarations.push(...mcpClient.listToolDeclarations())
+
   return [{ googleSearch: {} }, { functionDeclarations }]
 }
 
@@ -1162,6 +1165,8 @@ async function handleToolCalls(functionCalls: FunctionCall[]): Promise<void> {
       } else if (fc.name === 'stop_autonomous_task') {
         autonomousTask.stopAutonomousTask('stopped by DALVE')
         response = { result: 'Stopped the background task.' }
+      } else if (mcpClient.isMcpTool(fc.name)) {
+        response = await mcpClient.callMcpTool(fc.name, args)
       } else {
         response = { result: await composio.executeComposioTool(fc.name, args) }
       }

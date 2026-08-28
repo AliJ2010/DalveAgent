@@ -11,6 +11,7 @@ import { attachWindow as attachSettingsStoreWindow } from './lib/settingsStore'
 import { attachWindow as attachHandTrackingWindow, stop as stopHandTracking } from './lib/handTracking'
 import { initAutoUpdate } from './lib/autoUpdate'
 import { initTelegramBridge } from './lib/telegramBridge'
+import { reconnectAll as reconnectMcpServers } from './lib/mcpClient'
 
 // Belt-and-suspenders alongside the lazy singletons in settingsStore/agentStore: pin the app
 // name explicitly so userData resolves to the same %APPDATA%\dalve folder in dev and packaged
@@ -191,6 +192,7 @@ if (gotSingleInstanceLock) {
     createTray()
     initAutoUpdate()
     initTelegramBridge()
+    void reconnectMcpServers()
 
     // Voice wake-word ("Hey DALVE") was tried via two different offline engines and dropped —
     // neither reliably recognized the phrase. This hotkey is the replacement: free, instant,

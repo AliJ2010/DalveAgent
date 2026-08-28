@@ -29,6 +29,9 @@ interface StoredSecrets {
    *  first messages the bot after a token is saved, so a leaked/guessed bot token alone can't let
    *  a stranger control this PC. Cleared whenever the token changes. */
   telegramChatId?: string
+  /** Local-only — OAuth client registration + tokens per MCP server (encrypted per-server JSON
+   *  blob), keyed by server id. Never synced or exposed to the renderer; see mcpOAuth.ts. */
+  mcpOAuthState: Record<string, string>
 }
 
 function defaultStore(): StoredSecrets {
@@ -41,7 +44,8 @@ function defaultStore(): StoredSecrets {
     composioAuthConfigIds: {},
     mcpServers: [],
     dalveVoice: 'Kore',
-    dalveMemory: ''
+    dalveMemory: '',
+    mcpOAuthState: {}
   }
 }
 
@@ -299,6 +303,43 @@ class SettingsStore {
     const s = this.data.mcpServers.find((s) => s.id === id)
     if (!s) return undefined
     return { authHeader: s.authHeader, authToken: s.authToken ? decrypt(s.authToken) : undefined }
+  }
+
+  /** Main-process-only: every stored server with its real (decrypted) auth token, for mcpClient.ts
+   *  to actually connect with — getState()'s copy masks the token for the renderer. */
+  getMcpServerConfigs(): McpServerConfig[] {
+    return this.data.mcpServers.map((s) => ({ ...s, authToken: s.authToken ? decrypt(s.authToken) : undefined }))
+  }
+
+  /** Called by mcpClient.ts once a connection attempt (successful or not) resolves, so the
+   *  Settings screen reflects real connection state instead of whatever addMcpServer initially
+   *  guessed (always `connected: false` — nothing has actually tried connecting at that point). */
+  updateMcpServerStatus(id: string, connected: boolean, tools: string[]): void {
+    const s = this.data.mcpServers.find((s) => s.id === id)
+    if (!s) return
+    s.connected = connected
+    s.tools = tools
+    this.persist()
+    this.notifyChange()
+  }
+
+  /** OAuth client registration + tokens for one MCP server, encrypted as a single blob — separate
+   *  from the server's own record since this is main-process-only state (dynamically-registered
+   *  client info, access/refresh tokens, a PKCE verifier mid-flow) that must never reach the
+   *  renderer, unlike the rest of an McpServerConfig. */
+  getMcpOAuthState(serverId: string): Record<string, unknown> | undefined {
+    const encoded = this.data.mcpOAuthState[serverId]
+    if (!encoded) return undefined
+    try {
+      return JSON.parse(decrypt(encoded)) as Record<string, unknown>
+    } catch {
+      return undefined
+    }
+  }
+
+  setMcpOAuthState(serverId: string, state: Record<string, unknown>): void {
+    this.data.mcpOAuthState[serverId] = encrypt(JSON.stringify(state))
+    this.persist()
   }
 }
 

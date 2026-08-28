@@ -291,6 +291,9 @@ export function SettingsScreen(): React.JSX.Element {
                 <div>
                   <div style={{ fontSize: 13, color: 'var(--c-text-1)' }}>{s.name}</div>
                   <div style={{ fontSize: 11, color: 'var(--c-text-3)' }}>{s.url}</div>
+                  <div style={{ fontSize: 11, color: s.connected ? '#6fe08a' : 'var(--c-text-3)', marginTop: 2 }}>
+                    {s.connected ? `Connected — ${s.tools.length} tool(s)` : 'Not connected'}
+                  </div>
                 </div>
                 <button onClick={() => removeMcpServer(s.id)} style={{ color: 'var(--c-text-3)' }}>
                   <Trash2 size={14} />
@@ -320,6 +323,10 @@ export function SettingsScreen(): React.JSX.Element {
             >
               Add server
             </button>
+            <p style={{ fontSize: 11, color: 'var(--c-text-3)' }}>
+              Leave the auth fields blank for a server that uses its own login (like Lovable) —
+              DALVE will open your browser to sign in and approve access the first time it connects.
+            </p>
           </div>
         </Section>
 
