@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { HandLandmarker, FilesetResolver, type NormalizedLandmark } from '@mediapipe/tasks-vision'
-import { Hand, Square } from 'lucide-react'
+import { Hand, Square, Maximize2, Minimize2 } from 'lucide-react'
+
+// Real pixel dimensions of the preview canvas, not just its on-screen CSS size — drawing at a
+// higher resolution when "large" is picked keeps the bigger preview sharp instead of just
+// upscaling a small blurry buffer.
+const PREVIEW_SIZES = { small: { width: 240, height: 180 }, large: { width: 480, height: 360 } } as const
 
 // Pinned to the exact installed @mediapipe/tasks-vision version — jsdelivr serves each version
 // at its own versioned path, confirmed live to exist for this one; bumping the npm dependency
@@ -42,6 +47,7 @@ function computeSpread(hand: NormalizedLandmark[]): number {
 export function HandTrackingController(): React.JSX.Element {
   const [active, setActive] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [large, setLarge] = useState(false)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const landmarkerRef = useRef<HandLandmarker | null>(null)
@@ -195,7 +201,7 @@ export function HandTrackingController(): React.JSX.Element {
           <span className="tracked-label" style={{ color: 'var(--c-text-1)', fontSize: 11 }}>
             {error
               ? `HAND TRACKING FAILED: ${error}`
-              : 'HAND TRACKING ACTIVE — PINCH THUMB+INDEX TO CLICK, THUMB+MIDDLE TO RIGHT-CLICK'}
+              : 'HAND TRACKING ACTIVE — PINCH THUMB+INDEX TO CLICK (HOLD TO DRAG), THUMB+MIDDLE TO RIGHT-CLICK'}
           </span>
           {active && (
             <button
@@ -232,7 +238,33 @@ export function HandTrackingController(): React.JSX.Element {
             boxShadow: '0 8px 24px rgba(0,0,0,0.4)'
           }}
         >
-          <canvas ref={canvasRef} width={240} height={180} style={{ display: 'block' }} />
+          <canvas
+            ref={canvasRef}
+            width={PREVIEW_SIZES[large ? 'large' : 'small'].width}
+            height={PREVIEW_SIZES[large ? 'large' : 'small'].height}
+            style={{ display: 'block' }}
+          />
+          <button
+            onClick={() => setLarge((v) => !v)}
+            title={large ? 'Shrink preview' : 'Enlarge preview'}
+            style={{
+              position: 'absolute',
+              top: 6,
+              right: 6,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 24,
+              height: 24,
+              borderRadius: 6,
+              border: '1px solid rgba(212,175,55,0.5)',
+              background: 'rgba(0,0,0,0.5)',
+              color: 'var(--c-gold-bright)',
+              cursor: 'pointer'
+            }}
+          >
+            {large ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+          </button>
         </div>
       )}
     </>

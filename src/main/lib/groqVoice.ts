@@ -86,7 +86,20 @@ export function getActiveAgentId(): string | null {
 function getClient(): Groq {
   const apiKey = settingsStore.getGroqApiKey()
   if (!apiKey) throw new Error('Add your Groq API key in Settings first.')
-  return new Groq({ apiKey })
+  // The SDK's own default (60s timeout, retried) could otherwise leave a live voice turn silently
+  // "connecting" for minutes on a genuine network hang — a bounded, fast failure here means a bad
+  // connection surfaces as a spoken error almost immediately instead.
+  return new Groq({ apiKey, timeout: 20000, maxRetries: 1 })
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit, ms: number): Promise<Response> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), ms)
+  try {
+    return await fetch(url, { ...init, signal: controller.signal })
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 export async function startVoiceSession(agentId: string | null = null): Promise<void> {
@@ -237,18 +250,69 @@ const SYSTEM_PROMPT = `You are DALVE, a voice-first AI operating system, talking
 
 Real targeting priority, strongest to weakest: (1) A direct integration tool (Composio/MCP) if one exists. (2) browser_* tools for anything web-based — real DOM lookup, not a coordinate guess. (3) click_element for native desktop apps with a visible label. (4) click_mouse/move_mouse from the screenshot you're given — last resort, for non-textual content only. For an exact price on a trading chart, always use click_price_level, never click_mouse. For grid/board content (chess, spreadsheets), use define_grid + click_grid_cell.
 
-Never describe a physical action before actually calling the tool, and never describe an outcome (a message sent, a piece moved) until the result confirms it actually happened.`
+Never describe a physical action before actually calling the tool, and never describe an outcome (a message sent, a piece moved) until the result confirms it actually happened.
+
+IMPORTANT structural limit to understand about yourself: this engine only ever takes a turn when the user just spoke — there is no continuous screen watching here at all, unlike a fully live session. Nothing "wakes you up" on its own when a new WhatsApp message arrives while the user isn't talking to you. That is exactly what start_autonomous_task is for — a separate background loop that actively re-checks the screen every ~20 seconds and can act with nobody present. Whenever what's being asked amounts to "keep doing this without me talking to you" — monitoring a chat (WhatsApp especially) and replying to new messages as they come in is the single most common real case — you MUST call start_autonomous_task, every time. Give it a clear one-sentence goal; it keeps going until the goal is done, the user stops it, or you call stop_autonomous_task.`
+
+// Groq's free tier caps this model at 8,000 tokens/minute AND 3 images per request — confirmed
+// live from real logs showing repeated 413 "tokens per minute" and 400 "too many images" errors.
+// A full-resolution screenshot resent on every turn (history kept every prior one, unbounded)
+// blew past both limits within a handful of exchanges. maxWidth shrinks each screenshot before
+// it's ever added; stripOldImages/trimHistory keep old ones from piling up turn after turn.
+const SCREENSHOT_MAX_WIDTH = 1024
+const SCREENSHOT_QUALITY = 65
+const MAX_HISTORY_MESSAGES = 12
+
+/** Keeps only the most recent screenshot in the whole conversation — every earlier one becomes a
+ *  short text stand-in instead of being resent (and re-billed) on every subsequent turn. */
+function stripOldImages(msgs: ChatCompletionMessageParam[]): void {
+  let sawImage = false
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const msg = msgs[i]
+    if (msg.role !== 'user' || !Array.isArray(msg.content)) continue
+    if (!msg.content.some((p) => p.type === 'image_url')) continue
+    if (sawImage) {
+      msg.content = [
+        ...msg.content.filter((p) => p.type !== 'image_url'),
+        { type: 'text', text: '[earlier screenshot omitted]' }
+      ]
+    } else {
+      sawImage = true
+    }
+  }
+}
+
+/** Keeps the system prompt plus only the most recent exchanges — otherwise token usage grows
+ *  unbounded turn after turn regardless of images, and reliably blows the 8K TPM limit by itself. */
+function trimHistory(): void {
+  if (history.length <= MAX_HISTORY_MESSAGES) return
+  const hasSystem = history[0]?.role === 'system'
+  const system = hasSystem ? [history[0]] : []
+  history = [...system, ...history.slice(-(MAX_HISTORY_MESSAGES - system.length))]
+}
+
+function friendlyTurnError(raw: string): string {
+  if (raw.includes('rate_limit_exceeded')) {
+    return "Groq's free-tier rate limit was hit for that reply — wait a few seconds and try again, or ask something shorter."
+  }
+  if (raw.includes('Too many images')) {
+    return 'That request carried too many images for this model — try again, it should self-correct now.'
+  }
+  return raw
+}
 
 async function runTurn(userText: string): Promise<void> {
   try {
     const client = getClient()
-    const screenshot = await screenControl.captureScreenshotOnce(80)
+    const screenshot = await screenControl.captureScreenshotOnce(SCREENSHOT_QUALITY, SCREENSHOT_MAX_WIDTH)
     const content: ChatCompletionContentPart[] = [{ type: 'text', text: userText }]
     if (screenshot) {
       content.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${screenshot}` } })
     }
+    if (history.length === 0) history.push({ role: 'system', content: SYSTEM_PROMPT })
     history.push({ role: 'user', content })
-    if (history.length === 1) history.unshift({ role: 'system', content: SYSTEM_PROMPT })
+    stripOldImages(history)
+    trimHistory()
 
     const tools = await buildTools()
     emit({ type: 'toolActivity', active: false })
@@ -289,8 +353,9 @@ async function runTurn(userText: string): Promise<void> {
       emit({ type: 'toolActivity', active: false })
     }
   } catch (err) {
+    const raw = err instanceof Error ? err.message : String(err)
     log.error('[groqVoice] turn failed:', err instanceof Error ? err.stack : err)
-    emit({ type: 'error', message: err instanceof Error ? err.message : String(err) })
+    emit({ type: 'error', message: friendlyTurnError(raw) })
   } finally {
     if (phase !== 'idle') {
       phase = 'listening'
@@ -317,13 +382,14 @@ async function speak(text: string): Promise<void> {
   bargeInAboveFloorSince = null
 
   try {
-    const res = await fetch(
+    const res = await fetchWithTimeout(
       `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=pcm_24000`,
       {
         method: 'POST',
         headers: { 'xi-api-key': apiKey, 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, model_id: ELEVENLABS_MODEL })
-      }
+      },
+      20000
     )
     if (!res.ok) throw new Error(`ElevenLabs TTS failed: ${res.status} ${await res.text()}`)
     const audioBytes = Buffer.from(await res.arrayBuffer())
@@ -339,8 +405,14 @@ async function speak(text: string): Promise<void> {
       emit({ type: 'audio', data: chunk.toString('base64') })
     }
   } catch (err) {
+    // speak() is only ever called from inside runTurn()'s try block, whose `finally` resets
+    // phase/state back to listening once this returns — no reset needed here either way.
+    const isTimeout = err instanceof Error && err.name === 'AbortError'
     log.error('[groqVoice] ElevenLabs TTS failed:', err instanceof Error ? err.stack : err)
-    emit({ type: 'error', message: err instanceof Error ? err.message : String(err) })
+    emit({
+      type: 'error',
+      message: isTimeout ? 'ElevenLabs took too long to respond — try again.' : err instanceof Error ? err.message : String(err)
+    })
   }
 }
 
@@ -473,6 +545,7 @@ const STATIC_TOOLS: ChatCompletionTool[] = [
     type: 'object',
     properties: { deltaX: { type: 'number' }, deltaY: { type: 'number' } }
   }),
+  tool('take_screenshot', "Saves a real screenshot of the user's screen as a PNG file they can open later — distinct from the automatic vision context DALVE already sees every turn.", { type: 'object', properties: {} }),
   tool('start_autonomous_task', 'Hands off a task to a background loop that keeps watching the screen and acting even after this conversation ends.', {
     type: 'object',
     properties: { goal: { type: 'string' } },
@@ -659,6 +732,10 @@ async function executeVoiceTool(name: string, args: Record<string, unknown>): Pr
     case 'scroll':
       screenControl.scroll(Number(args.deltaX ?? 0), Number(args.deltaY ?? 0))
       return { result: 'Scrolled.' }
+    case 'take_screenshot': {
+      const { status, path, message } = await screenControl.saveScreenshot()
+      return { status, path, result: message }
+    }
     case 'start_autonomous_task': {
       const goal = String(args.goal ?? '').trim()
       if (!goal) return { error: 'No goal given.' }

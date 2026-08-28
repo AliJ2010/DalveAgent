@@ -1,5 +1,7 @@
-import { desktopCapturer, screen, type BrowserWindow } from 'electron'
+import { app, desktopCapturer, screen, type BrowserWindow } from 'electron'
 import { performance } from 'perf_hooks'
+import { join } from 'path'
+import { mkdirSync, writeFileSync, existsSync } from 'fs'
 import type { ScreenControlEvent } from '@shared/types'
 
 // robotjs is a native addon (rebuilt against Electron's ABI via `electron-builder install-app-deps`
@@ -74,8 +76,11 @@ export function getFrameSize(): { width: number; height: number } {
   }
 }
 
-/** Captures a single screenshot of the primary monitor as base64 JPEG. */
-export async function captureScreenshotOnce(quality = 88): Promise<string | null> {
+/** Captures a single screenshot of the primary monitor as base64 JPEG. `maxWidth`, if given,
+ *  downscales before encoding — a real, confirmed need for the Groq voice engine: a full native-
+ *  resolution screenshot (e.g. a 1440p+ display) alone was enough to blow past Groq's free-tier
+ *  8,000 tokens/minute limit for its vision model in a single request. */
+export async function captureScreenshotOnce(quality = 88, maxWidth?: number): Promise<string | null> {
   const display = primaryDisplay()
   const width = Math.round(display.bounds.width * display.scaleFactor)
   const height = Math.round(display.bounds.height * display.scaleFactor)
@@ -86,7 +91,35 @@ export async function captureScreenshotOnce(quality = 88): Promise<string | null
   })
   const matched = sources.find((s) => s.display_id === String(display.id)) ?? sources[0]
   if (!matched || matched.thumbnail.isEmpty()) return null
-  return matched.thumbnail.toJPEG(quality).toString('base64')
+  let image = matched.thumbnail
+  const size = image.getSize()
+  if (maxWidth && size.width > maxWidth) {
+    image = image.resize({ width: maxWidth, height: Math.round(size.height * (maxWidth / size.width)) })
+  }
+  return image.toJPEG(quality).toString('base64')
+}
+
+/** Captures the primary monitor at full quality and saves it as a real PNG file the user can
+ *  actually open/share — distinct from captureScreenshotOnce, which only ever produces an
+ *  in-memory base64 JPEG fed silently to a model as vision context. Saved under Pictures so it
+ *  shows up somewhere the user would naturally look, not buried in an app-data folder. */
+export async function saveScreenshot(): Promise<{ status: 'SUCCESS' | 'FAILED'; path?: string; message: string }> {
+  const display = primaryDisplay()
+  const width = Math.round(display.bounds.width * display.scaleFactor)
+  const height = Math.round(display.bounds.height * display.scaleFactor)
+
+  const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width, height } })
+  const matched = sources.find((s) => s.display_id === String(display.id)) ?? sources[0]
+  if (!matched || matched.thumbnail.isEmpty()) {
+    return { status: 'FAILED', message: 'Could not capture the screen.' }
+  }
+
+  const dir = join(app.getPath('pictures'), 'DALVE Screenshots')
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const filePath = join(dir, `dalve-${stamp}.png`)
+  writeFileSync(filePath, matched.thumbnail.toPNG())
+  return { status: 'SUCCESS', path: filePath, message: `Saved a screenshot to ${filePath}` }
 }
 
 /** Starts periodic screenshot capture of the active monitor, handed to `onFrameCb` as base64 JPEG (~1 fps). */
@@ -262,6 +295,18 @@ export function setCursorPositionAbsolute(x: number, y: number): void {
  *  is the user's own physical click, not an AI decision, so this isn't gated either. */
 export function clickAtCurrentPosition(button: 'left' | 'right' = 'left'): void {
   getRobot().mouseClick(button)
+}
+
+/** Explicit press/release (not a single click) — what hand-tracking's click-and-hold-to-drag
+ *  needs: press the instant a pinch engages, keep the button held while the pinch is maintained,
+ *  release the instant it's released. Same "the user's own gesture is the actual actor" reasoning
+ *  as the other hand-tracking primitives here, so this isn't gated either. */
+export function pressMouseDown(button: 'left' | 'right' = 'left'): void {
+  getRobot().mouseToggle('down', button)
+}
+
+export function releaseMouseUp(button: 'left' | 'right' = 'left'): void {
+  getRobot().mouseToggle('up', button)
 }
 
 /**

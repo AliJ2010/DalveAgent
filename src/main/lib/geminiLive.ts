@@ -60,7 +60,7 @@ Clicking the wrong thing (e.g. the wrong contact in a chat list, the wrong item 
 
 Narrate briefly what you're doing as you go, in a sentence or two — not a blow-by-blow of every click, and never a restatement of the goal. Call stop_screen_share when you're done or if asked to stop.
 
-If the user asks you to keep handling something on your own after they stop talking to you — e.g. "keep replying to this conversation without me," "watch for a reply and handle it" — call start_autonomous_task with a clear one-sentence goal. That hands the task to a background loop that checks the screen every ~20 seconds and acts on its own. It keeps going indefinitely until it decides the goal is complete, until the user stops it from the app, or until you call stop_autonomous_task. Only start one for something the user actually asked to be handled unattended — never on your own initiative — and still never enter passwords or payment details even in this mode.`
+IMPORTANT structural limit to understand about yourself: watching the screen live (start_screen_share) only ever lets you REACT — to something the user just said, or mid-tool-call-loop. Getting a passive video frame with a new WhatsApp message sitting in it does NOT by itself make you take a turn and act; nothing "wakes you up" just because the picture changed while nobody is talking to you. That is exactly why start_autonomous_task exists — it's a separate loop that actively re-checks the screen on its own timer and can act with nobody present. Whenever what's being asked amounts to "keep doing this without me watching/talking to you" — monitoring a chat (WhatsApp especially) and replying to new messages as they come in is the single most common real case — you MUST call start_autonomous_task, every time, not just when the user's exact wording matches an example. Trying to "just keep an eye on it" during the current live session instead is the concrete, previously-reported failure mode ("keeps relying on me to tell it to reply") — it silently doesn't work, because nothing will prompt you to look again once the user stops talking. Give it a clear one-sentence goal; it checks the screen every ~20 seconds and keeps going indefinitely until it decides the goal is complete, until the user stops it from the app, or until you call stop_autonomous_task. Only start one for something the user actually asked to be handled unattended — never on your own initiative — and still never enter passwords or payment details even in this mode.`
 
 const AGENT_COLORS = ['#d4af37', '#c9a227', '#e0b84a', '#f2d06b', '#b8860b', '#eecb6f', '#a9812c']
 
@@ -261,6 +261,13 @@ const START_HAND_TRACKING_TOOL: FunctionDeclaration = {
 const STOP_HAND_TRACKING_TOOL: FunctionDeclaration = {
   name: 'stop_hand_tracking',
   description: 'Turns off hand tracking and releases the webcam.',
+  parametersJsonSchema: { type: 'object', properties: {} }
+}
+
+const TAKE_SCREENSHOT_TOOL: FunctionDeclaration = {
+  name: 'take_screenshot',
+  description:
+    "Saves a real screenshot of the user's screen as a PNG file they can open later — distinct from the live vision context DALVE already sees every frame. Call this when the user explicitly asks for a screenshot to be saved/taken, not for ordinary looking at the screen.",
   parametersJsonSchema: { type: 'object', properties: {} }
 }
 
@@ -549,6 +556,7 @@ async function buildToolsForAgent(agent: AgentConfig | null): Promise<Tool[]> {
     OPEN_TRADING_SETUP_TOOL,
     START_HAND_TRACKING_TOOL,
     STOP_HAND_TRACKING_TOOL,
+    TAKE_SCREENSHOT_TOOL,
     LIST_AGENTS_TOOL,
     SWITCH_AGENT_TOOL,
     REMEMBER_FACT_TOOL,
@@ -906,6 +914,9 @@ async function handleToolCalls(functionCalls: FunctionCall[]): Promise<void> {
       } else if (fc.name === 'stop_hand_tracking') {
         const { status, message } = handTracking.stop()
         response = { status, result: message }
+      } else if (fc.name === 'take_screenshot') {
+        const { status, path, message } = await screenControl.saveScreenshot()
+        response = { status, path, result: message }
       } else if (fc.name === 'create_agent') {
         const type = args.type === 'bot' ? 'bot' : 'companion'
         const agent = agentStore.create({

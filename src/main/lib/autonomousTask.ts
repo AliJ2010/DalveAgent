@@ -143,6 +143,8 @@ Real targeting priority, strongest to weakest — always use the strongest one t
 
 You can take several actions across this check, but for anything that changes the page (a click, typing, a key press) prefer ONE such action per turn, then look at its result before deciding the next one — every click/type/press result tells you plainly if the page's visible text didn't change at all, which means it didn't work; when you see that, do not repeat the same action, and do not claim it succeeded. Only skip this one-at-a-time discipline for pure reads (browser_read_text, browser_evaluate) — those are safe to chain. Call finish_cycle once there's genuinely nothing further to do until the next check — never mid-sequence. Call mark_task_complete only once the ENTIRE goal is done.
 
+UNCONDITIONAL rule for any goal that involves a chat/messaging app (WhatsApp or otherwise): every single cycle, check for new/unread messages and, if this goal covers replying to them, draft and actually send a reply yourself, completely on your own — right now, this cycle, not "noted, will reply once told." Never call finish_cycle after merely noticing a new message that needs a reply; that is exactly the "waits for the user to say reply" failure this task exists to prevent. The only acceptable reason to not reply immediately is genuine ambiguity the goal itself doesn't resolve (e.g. no idea what the correct answer/decision is) — in that case say so in your narration, but still don't just sit on an unanswered message silently.
+
 Recent history of this task:\n${history.length > 0 ? history.join('\n') : '(nothing yet)'}`
 
   // Ground truth for "did anything change" must not depend on the model remembering to ask for

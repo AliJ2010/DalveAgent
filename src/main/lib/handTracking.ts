@@ -21,6 +21,11 @@ let active = false
 let smoothedX: number | null = null
 let smoothedY: number | null = null
 let leftPinching = false
+let leftPinchStartAt: number | null = null
+// True once a held left pinch has crossed HOLD_TO_DRAG_MS — cursor movement switches back to full
+// speed at that point (see cursorSlowdownFactor) so the hand can actually drag something instead
+// of staying frozen the whole time a pinch is held, which is what pinching otherwise looks like.
+let leftDragging = false
 let rightPinching = false
 
 // Lower = smoother but laggier, higher = snappier but jitterier. Started at 0.35, then 0.15 after
@@ -34,32 +39,41 @@ const ACTIVE_MARGIN = 0.05
 
 // Pinch detection uses hysteresis (two different thresholds for "just pinched" vs. "just
 // released"), not one — a single threshold flickers true/false across frame-to-frame landmark
-// noise right at the boundary, which is the actual mechanism behind "sometimes doesn't register
-// as a click." ENGAGE is deliberately tighter than RELEASE so a genuine pinch registers cleanly
-// and doesn't re-fire until the fingers have clearly moved apart again.
-const PINCH_ENGAGE = 0.045
-const PINCH_RELEASE = 0.08
-// As fingers approach pinch distance, cursor movement gets damped toward near-frozen — directly
-// per user feedback/suggestion: the actual failure mode wasn't the pinch failing to register, it
-// was the cursor still drifting during the docking motion, so the click landed off-target and
-// read as "it moved instead of clicking." SLOWDOWN_START is the distance at which damping begins
-// ramping in; below PINCH_ENGAGE the cursor is nearly stationary.
-const SLOWDOWN_START = 0.14
+// noise right at the boundary. Loosened both from the first pass (0.045/0.08) per direct feedback
+// that pinches still needed "too much" closing distance to register — ENGAGE stays tighter than
+// RELEASE so a genuine pinch registers cleanly and doesn't re-fire until fingers clearly separate.
+const PINCH_ENGAGE = 0.055
+const PINCH_RELEASE = 0.09
+// As fingers approach pinch distance, cursor movement gets damped toward fully frozen (not just
+// slowed) — direct feedback was that clicks still failed to register because the cursor kept
+// drifting during the docking motion even with the earlier partial damping, landing the click
+// off-target. SLOWDOWN_START is the distance at which damping begins ramping in; at or below
+// PINCH_ENGAGE the cursor is completely still, not just nearly so.
+const SLOWDOWN_START = 0.16
+// How long a left pinch (thumb+index) must be held before it's treated as "grab and drag" instead
+// of "click" — per explicit request, mirrors holding down the left mouse button to move something.
+const HOLD_TO_DRAG_MS = 2000
 
-// Zoom: tracks a short rolling window of {spread, palmY} samples and looks for the hand
-// opening while rising (zoom in) or closing while falling (zoom out) across that window — one
-// continuous gesture, not a per-frame toggle. Thresholds/window length are a first pass with no
-// camera to tune against, same caveat as the original sensitivity constants.
-const ZOOM_WINDOW_MS = 450
-const ZOOM_SPREAD_THRESHOLD = 0.06
-const ZOOM_VERTICAL_THRESHOLD = 0.08
-const ZOOM_COOLDOWN_MS = 700
-const ZOOM_SCROLL_NOTCHES = 4
+// Zoom: tracks a short rolling window of hand-openness ("spread") samples and looks for it
+// growing (zoom in) or shrinking (zoom out) across that window — one continuous gesture, not a
+// per-frame toggle. No longer requires any vertical hand motion (per feedback that having to
+// move the hand up/down at the same time made the gesture harder to land) — openness alone
+// drives it now. Threshold loosened and cooldown shortened per feedback that it was "hard to get
+// it to notice" and jumped by an unhelpfully small amount each time; each detected gesture now
+// fires one clearly noticeable step rather than a barely-visible increment. Thresholds are still a
+// first pass with no camera to tune against, same caveat as the original constants.
+const ZOOM_WINDOW_MS = 400
+const ZOOM_SPREAD_THRESHOLD = 0.045
+const ZOOM_COOLDOWN_MS = 500
+// Ctrl+scroll zoom step size is ultimately up to whatever app is focused (there's no OS-wide way
+// to force an exact "15% per step" — Chrome-based zoom, OS icon scaling, and PDF viewers all
+// interpret scroll notches differently), but a bigger notch burst per gesture gets much closer to
+// one clearly noticeable jump instead of the barely-perceptible increments this had before.
+const ZOOM_SCROLL_NOTCHES = 10
 
 interface ZoomSample {
   t: number
   spread: number
-  palmY: number
 }
 let zoomHistory: ZoomSample[] = []
 let lastZoomAt = 0
@@ -80,18 +94,26 @@ export function start(): { status: 'SUCCESS' | 'FAILED'; message: string } {
   smoothedX = null
   smoothedY = null
   leftPinching = false
+  leftPinchStartAt = null
+  leftDragging = false
   rightPinching = false
   zoomHistory = []
   win.webContents.send('handTracking:start')
   return {
     status: 'SUCCESS',
     message:
-      'Starting the camera — move your index finger to move the cursor, pinch thumb+index to left-click, thumb+middle to right-click, open/close your hand while moving up/down to zoom.'
+      'Starting the camera — move your index finger to move the cursor, pinch thumb+index to left-click (hold it to drag), thumb+middle to right-click, open/close your hand to zoom.'
   }
 }
 
 export function stop(): { status: 'SUCCESS'; message: string } {
+  // Safety net: never leave the mouse button physically held down if tracking stops mid-drag.
+  if (leftPinching) screenControl.releaseMouseUp('left')
   active = false
+  leftPinching = false
+  leftPinchStartAt = null
+  leftDragging = false
+  rightPinching = false
   win?.webContents.send('handTracking:stop')
   return { status: 'SUCCESS', message: 'Hand tracking stopped, camera released.' }
 }
@@ -127,22 +149,56 @@ function handlePinch(
   return wasPinching
 }
 
-function checkZoom(spread: number, palmY: number): void {
+/** Left click gets its own state machine (instead of the simple handlePinch above) because it
+ *  supports click-and-hold-to-drag: press on engage, keep the button held the whole time the
+ *  pinch is maintained, release on release — a fast pinch-release reads as a normal click, a
+ *  pinch held past HOLD_TO_DRAG_MS reads as "grab and drag". */
+function updateLeftPinch(dist: number): void {
   const now = Date.now()
-  zoomHistory.push({ t: now, spread, palmY })
+  if (!leftPinching && dist < PINCH_ENGAGE) {
+    leftPinching = true
+    leftPinchStartAt = now
+    leftDragging = false
+    screenControl.pressMouseDown('left')
+    return
+  }
+  if (leftPinching && dist > PINCH_RELEASE) {
+    leftPinching = false
+    leftPinchStartAt = null
+    leftDragging = false
+    screenControl.releaseMouseUp('left')
+    return
+  }
+  if (leftPinching && !leftDragging && leftPinchStartAt !== null && now - leftPinchStartAt >= HOLD_TO_DRAG_MS) {
+    leftDragging = true
+  }
+}
+
+/** While docking a fresh pinch (closing in, not yet decided click vs. drag), cursor movement
+ *  damps toward fully frozen so the click lands where it was aimed instead of drifting during the
+ *  closing motion. Once a left pinch has turned into an actual drag, that protection would just
+ *  prevent the drag itself — full speed resumes so the hand can drag normally. */
+function cursorSlowdownFactor(closestPinch: number): number {
+  if (leftDragging) return 1
+  if (closestPinch <= PINCH_ENGAGE) return 0
+  if (closestPinch >= SLOWDOWN_START) return 1
+  return (closestPinch - PINCH_ENGAGE) / (SLOWDOWN_START - PINCH_ENGAGE)
+}
+
+function checkZoom(spread: number): void {
+  const now = Date.now()
+  zoomHistory.push({ t: now, spread })
   zoomHistory = zoomHistory.filter((s) => now - s.t <= ZOOM_WINDOW_MS)
   if (zoomHistory.length < 3 || now - lastZoomAt < ZOOM_COOLDOWN_MS) return
 
   const oldest = zoomHistory[0]
   const spreadDelta = spread - oldest.spread
-  // Normalized image Y increases downward, so a negative delta means the hand rose.
-  const verticalDelta = oldest.palmY - palmY
 
-  if (spreadDelta > ZOOM_SPREAD_THRESHOLD && verticalDelta > ZOOM_VERTICAL_THRESHOLD) {
+  if (spreadDelta > ZOOM_SPREAD_THRESHOLD) {
     lastZoomAt = now
     zoomHistory = []
     screenControl.zoomAtCurrentPosition(ZOOM_SCROLL_NOTCHES)
-  } else if (spreadDelta < -ZOOM_SPREAD_THRESHOLD && verticalDelta < -ZOOM_VERTICAL_THRESHOLD) {
+  } else if (spreadDelta < -ZOOM_SPREAD_THRESHOLD) {
     lastZoomAt = now
     zoomHistory = []
     screenControl.zoomAtCurrentPosition(-ZOOM_SCROLL_NOTCHES)
@@ -155,18 +211,14 @@ export function onFrame(frame: HandFrame): void {
   if (!active) return
 
   const closestPinch = Math.min(frame.thumbIndexDist, frame.thumbMiddleDist)
-  const slowdown =
-    closestPinch >= SLOWDOWN_START
-      ? 1
-      : Math.max(0.08, closestPinch / SLOWDOWN_START)
-  updateCursor(frame.indexX, frame.indexY, BASE_SMOOTHING * slowdown)
+  updateCursor(frame.indexX, frame.indexY, BASE_SMOOTHING * cursorSlowdownFactor(closestPinch))
 
-  leftPinching = handlePinch(frame.thumbIndexDist, leftPinching, () => screenControl.clickAtCurrentPosition('left'))
+  updateLeftPinch(frame.thumbIndexDist)
   // Only consider a right-click pinch when the left-click gesture isn't also currently engaged,
   // so a thumb resting near both fingers during a left-click doesn't also fire a right-click.
   if (!leftPinching) {
     rightPinching = handlePinch(frame.thumbMiddleDist, rightPinching, () => screenControl.clickAtCurrentPosition('right'))
   }
 
-  checkZoom(frame.spread, frame.palmY)
+  checkZoom(frame.spread)
 }

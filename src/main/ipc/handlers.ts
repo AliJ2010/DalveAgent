@@ -72,9 +72,21 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('settings:listElevenLabsVoices', async () => {
     const apiKey = settingsStore.getElevenLabsApiKey()
     if (!apiKey) throw new Error('Add your ElevenLabs API key first.')
-    const res = await fetch('https://api.elevenlabs.io/v2/voices?page_size=100', {
-      headers: { 'xi-api-key': apiKey }
-    })
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 15000)
+    let res: Response
+    try {
+      res = await fetch('https://api.elevenlabs.io/v2/voices?page_size=100', {
+        headers: { 'xi-api-key': apiKey },
+        signal: controller.signal
+      })
+    } catch (err) {
+      throw err instanceof Error && err.name === 'AbortError'
+        ? new Error('ElevenLabs took too long to respond.')
+        : err
+    } finally {
+      clearTimeout(timer)
+    }
     if (!res.ok) throw new Error(`ElevenLabs voice list failed: ${res.status} ${await res.text()}`)
     const data = (await res.json()) as { voices: { voice_id: string; name: string; category?: string }[] }
     return data.voices.map((v) => ({ voiceId: v.voice_id, name: v.name, category: v.category }))
