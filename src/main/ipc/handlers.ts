@@ -3,6 +3,7 @@ import { settingsStore } from '../lib/settingsStore'
 import { agentStore } from '../lib/agentStore'
 import { generateAgentFromPrompt } from '../lib/agentGenerator'
 import * as geminiLive from '../lib/geminiLive'
+import * as groqVoice from '../lib/groqVoice'
 import * as composio from '../lib/composio'
 import * as screenControl from '../lib/screenControl'
 import * as autonomousTask from '../lib/autonomousTask'
@@ -34,6 +35,39 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('settings:setTelegramBotToken', (_e, token: string) => {
     settingsStore.setTelegramBotToken(token)
     return settingsStore.getState()
+  })
+
+  ipcMain.handle('settings:setGroqKey', (_e, key: string) => {
+    settingsStore.setGroqApiKey(key)
+    return settingsStore.getState()
+  })
+
+  ipcMain.handle('settings:setElevenLabsKey', (_e, key: string) => {
+    settingsStore.setElevenLabsApiKey(key)
+    return settingsStore.getState()
+  })
+
+  ipcMain.handle('settings:setElevenLabsVoice', (_e, voiceId: string, voiceName: string) => {
+    settingsStore.setElevenLabsVoice(voiceId, voiceName)
+    return settingsStore.getState()
+  })
+
+  ipcMain.handle('settings:setVoiceEngine', (_e, engine: 'gemini' | 'groq') => {
+    settingsStore.setVoiceEngine(engine)
+    return settingsStore.getState()
+  })
+
+  // Real ElevenLabs voice list, fetched with whatever key is currently saved — lets the Settings
+  // screen offer an actual picker instead of asking the user to paste a raw voice ID by hand.
+  ipcMain.handle('settings:listElevenLabsVoices', async () => {
+    const apiKey = settingsStore.getElevenLabsApiKey()
+    if (!apiKey) throw new Error('Add your ElevenLabs API key first.')
+    const res = await fetch('https://api.elevenlabs.io/v2/voices?page_size=100', {
+      headers: { 'xi-api-key': apiKey }
+    })
+    if (!res.ok) throw new Error(`ElevenLabs voice list failed: ${res.status} ${await res.text()}`)
+    const data = (await res.json()) as { voices: { voice_id: string; name: string; category?: string }[] }
+    return data.voices.map((v) => ({ voiceId: v.voice_id, name: v.name, category: v.category }))
   })
 
   ipcMain.handle('settings:setComposioKey', async (_e, key: string) => {
@@ -197,10 +231,18 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('agents:remove', (_e, id: string) => agentStore.remove(id))
 
-  // --- Voice (Gemini Live) ---
+  // --- Voice (Gemini Live, or Groq+ElevenLabs — see settingsStore.voiceEngine) ---
+  // Kept as two full, independent engines rather than one merged with branches throughout —
+  // Gemini Live is a true bidirectional streaming session or none at all, while the Groq engine
+  // is a record/transcribe/reason/synthesize cascade with its own VAD; forcing one code path to
+  // cover both would leak one engine's assumptions into the other everywhere.
+  function activeEngine(): typeof geminiLive | typeof groqVoice {
+    return settingsStore.getVoiceEngine() === 'groq' ? groqVoice : geminiLive
+  }
+
   ipcMain.handle('voice:start', async (_e, agentId?: string | null) => {
     try {
-      await geminiLive.startVoiceSession(agentId ?? null)
+      await activeEngine().startVoiceSession(agentId ?? null)
     } catch (err) {
       console.error('[voice:start] failed:', err)
       throw err
@@ -208,15 +250,15 @@ export function registerIpcHandlers(): void {
   })
 
   ipcMain.handle('voice:stop', () => {
-    geminiLive.stopVoiceSession()
+    activeEngine().stopVoiceSession()
   })
 
   ipcMain.handle('voice:sendText', (_e, text: string) => {
-    geminiLive.sendText(text)
+    activeEngine().sendText(text)
   })
 
   ipcMain.on('voice:audioChunk', (_e, base64: string) => {
-    geminiLive.sendAudioChunk(base64)
+    activeEngine().sendAudioChunk(base64)
   })
 
   // --- Screen control ---

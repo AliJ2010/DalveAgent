@@ -24,6 +24,15 @@ const dalveApi = {
       ipcRenderer.invoke('settings:setAnthropicKey', key),
     setTelegramBotToken: (token: string): Promise<SettingsState> =>
       ipcRenderer.invoke('settings:setTelegramBotToken', token),
+    setGroqKey: (key: string): Promise<SettingsState> => ipcRenderer.invoke('settings:setGroqKey', key),
+    setElevenLabsKey: (key: string): Promise<SettingsState> =>
+      ipcRenderer.invoke('settings:setElevenLabsKey', key),
+    setElevenLabsVoice: (voiceId: string, voiceName: string): Promise<SettingsState> =>
+      ipcRenderer.invoke('settings:setElevenLabsVoice', voiceId, voiceName),
+    setVoiceEngine: (engine: 'gemini' | 'groq'): Promise<SettingsState> =>
+      ipcRenderer.invoke('settings:setVoiceEngine', engine),
+    listElevenLabsVoices: (): Promise<{ voiceId: string; name: string; category?: string }[]> =>
+      ipcRenderer.invoke('settings:listElevenLabsVoices'),
     setComposioKey: (key: string): Promise<SettingsState> =>
       ipcRenderer.invoke('settings:setComposioKey', key),
     setDalveVoice: (voice: string): Promise<SettingsState> =>

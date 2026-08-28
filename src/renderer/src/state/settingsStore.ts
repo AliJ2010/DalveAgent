@@ -8,6 +8,12 @@ interface SettingsStoreState {
   setGeminiKey: (key: string) => Promise<void>
   setAnthropicKey: (key: string) => Promise<void>
   setTelegramBotToken: (token: string) => Promise<void>
+  setGroqKey: (key: string) => Promise<void>
+  setElevenLabsKey: (key: string) => Promise<void>
+  setElevenLabsVoice: (voiceId: string, voiceName: string) => Promise<void>
+  setVoiceEngine: (engine: 'gemini' | 'groq') => Promise<void>
+  elevenLabsVoices: { voiceId: string; name: string; category?: string }[]
+  loadElevenLabsVoices: () => Promise<void>
   setComposioKey: (key: string) => Promise<void>
   setDalveVoice: (voice: string) => Promise<void>
   setDalveMemory: (memory: string) => Promise<void>
@@ -41,6 +47,7 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
   catalog: [],
   catalogLoading: false,
   catalogError: null,
+  elevenLabsVoices: [],
 
   refresh: async () => {
     set({ loading: true })
@@ -61,6 +68,36 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
   setTelegramBotToken: async (token) => {
     const settings = await window.dalve.settings.setTelegramBotToken(token)
     set({ settings })
+  },
+
+  setGroqKey: async (key) => {
+    const settings = await window.dalve.settings.setGroqKey(key)
+    set({ settings })
+  },
+
+  setElevenLabsKey: async (key) => {
+    const settings = await window.dalve.settings.setElevenLabsKey(key)
+    set({ settings })
+  },
+
+  setElevenLabsVoice: async (voiceId, voiceName) => {
+    const settings = await window.dalve.settings.setElevenLabsVoice(voiceId, voiceName)
+    set({ settings })
+  },
+
+  setVoiceEngine: async (engine) => {
+    const settings = await window.dalve.settings.setVoiceEngine(engine)
+    set({ settings })
+  },
+
+  loadElevenLabsVoices: async () => {
+    if (get().elevenLabsVoices.length > 0) return
+    try {
+      const voices = await window.dalve.settings.listElevenLabsVoices()
+      set({ elevenLabsVoices: voices })
+    } catch (err) {
+      console.error('[settings] failed to load ElevenLabs voices:', err)
+    }
   },
 
   setComposioKey: async (key) => {

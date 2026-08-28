@@ -32,6 +32,13 @@ interface StoredSecrets {
   /** Local-only — OAuth client registration + tokens per MCP server (encrypted per-server JSON
    *  blob), keyed by server id. Never synced or exposed to the renderer; see mcpOAuth.ts. */
   mcpOAuthState: Record<string, string>
+  groqApiKey?: string // base64-encoded, safeStorage-encrypted
+  elevenLabsApiKey?: string // base64-encoded, safeStorage-encrypted
+  elevenLabsVoiceId?: string
+  elevenLabsVoiceName?: string
+  /** Which engine powers the live voice session — kept alongside Gemini (not a replacement) so a
+   *  problem with the new cascade never leaves the user with no working voice option at all. */
+  voiceEngine: 'gemini' | 'groq'
 }
 
 function defaultStore(): StoredSecrets {
@@ -45,7 +52,8 @@ function defaultStore(): StoredSecrets {
     mcpServers: [],
     dalveVoice: 'Kore',
     dalveMemory: '',
-    mcpOAuthState: {}
+    mcpOAuthState: {},
+    voiceEngine: 'gemini'
   }
 }
 
@@ -150,7 +158,12 @@ class SettingsStore {
       dalveVoice: this.data.dalveVoice,
       dalveMemory: this.data.dalveMemory,
       telegramBotTokenSet: !!this.data.telegramBotToken,
-      telegramChatBound: !!this.data.telegramChatId
+      telegramChatBound: !!this.data.telegramChatId,
+      groqApiKeySet: !!this.data.groqApiKey,
+      elevenLabsApiKeySet: !!this.data.elevenLabsApiKey,
+      elevenLabsVoiceId: this.data.elevenLabsVoiceId,
+      elevenLabsVoiceName: this.data.elevenLabsVoiceName,
+      voiceEngine: this.data.voiceEngine
     }
   }
 
@@ -231,6 +244,43 @@ class SettingsStore {
   setTelegramChatId(chatId: string): void {
     this.data.telegramChatId = chatId
     this.persist()
+  }
+
+  setGroqApiKey(key: string): void {
+    this.data.groqApiKey = key ? encrypt(key) : undefined
+    this.persist()
+    this.notifyChange()
+  }
+
+  getGroqApiKey(): string | undefined {
+    return this.data.groqApiKey ? decrypt(this.data.groqApiKey) : undefined
+  }
+
+  setElevenLabsApiKey(key: string): void {
+    this.data.elevenLabsApiKey = key ? encrypt(key) : undefined
+    this.persist()
+    this.notifyChange()
+  }
+
+  getElevenLabsApiKey(): string | undefined {
+    return this.data.elevenLabsApiKey ? decrypt(this.data.elevenLabsApiKey) : undefined
+  }
+
+  setElevenLabsVoice(voiceId: string, voiceName: string): void {
+    this.data.elevenLabsVoiceId = voiceId
+    this.data.elevenLabsVoiceName = voiceName
+    this.persist()
+    this.notifyChange()
+  }
+
+  setVoiceEngine(engine: 'gemini' | 'groq'): void {
+    this.data.voiceEngine = engine
+    this.persist()
+    this.notifyChange()
+  }
+
+  getVoiceEngine(): 'gemini' | 'groq' {
+    return this.data.voiceEngine
   }
 
   /** Main-process-only accessor. Never exposed to the renderer over IPC. */

@@ -89,6 +89,11 @@ export interface SettingsState {
   dalveMemory: string
   telegramBotTokenSet: boolean
   telegramChatBound: boolean
+  groqApiKeySet: boolean
+  elevenLabsApiKeySet: boolean
+  elevenLabsVoiceId?: string
+  elevenLabsVoiceName?: string
+  voiceEngine: 'gemini' | 'groq'
 }
 
 /** One tracked-hand frame from the renderer's camera+MediaPipe pipeline, sent to the main
