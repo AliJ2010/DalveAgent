@@ -20,13 +20,18 @@ let smoothedX: number | null = null
 let smoothedY: number | null = null
 let wasPinching = false
 
-// Lower = smoother but laggier, higher = snappier but jitterier — landed here by feel, not
-// measurement (no way to tune this without an actual camera+hand to test against).
-const SMOOTHING = 0.35
+// Lower = smoother but laggier, higher = snappier but jitterier. Started at 0.35; lowered after
+// real feedback that the cursor felt too fast/twitchy — this is the dominant "speed" knob since
+// it controls how much of the gap to the new hand position gets closed every single frame.
+const SMOOTHING = 0.15
 // A hand rarely reaches the true edges of the camera frame comfortably — mapping only the
-// center 80% of tracked range to the full screen means a natural, relaxed hand range still
+// center 90% of tracked range to the full screen means a natural, relaxed hand range still
 // reaches every screen edge instead of requiring an uncomfortable stretch to the frame border.
-const ACTIVE_MARGIN = 0.1
+// Widened from 0.1 (80% range) after the same "too fast" feedback — a WIDER active range means
+// the same hand movement now covers proportionally LESS screen distance (lower sensitivity),
+// at the small cost of needing to reach slightly closer to the frame's true edge for the very
+// corners of the screen.
+const ACTIVE_MARGIN = 0.05
 
 function mapAxis(raw: number): number {
   const t = (raw - ACTIVE_MARGIN) / (1 - 2 * ACTIVE_MARGIN)
