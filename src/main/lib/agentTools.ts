@@ -4,6 +4,7 @@ import * as uiAutomation from './uiAutomation'
 import * as ocr from './ocr'
 import * as gridTargeting from './gridTargeting'
 import * as browserControl from './browserControl'
+import { createReminderTool, listRemindersTool, cancelReminderTool } from './scheduleStore'
 
 /**
  * The screen/browser/desktop tool set shared by every Claude-driven agent loop in DALVE
@@ -102,6 +103,32 @@ const UNDO_LAST_TYPED_TEXT_TOOL: Tool = {
     "Sends the active app's own undo (Ctrl+Z) to revert the last text DALVE typed with type_text/press_key. Only works immediately after typing, before a click/drag/Enter/send happened since — a click or a sent message cannot be reliably undone this way, and this tool will say so honestly rather than pretend to fix it.",
   input_schema: { type: 'object', properties: {} }
 }
+const CREATE_REMINDER_TOOL: Tool = {
+  name: 'create_reminder',
+  description:
+    'Schedules a reminder or recurring action for a future time, shown on the user\'s Calendar tab. Compute dueAtIso yourself as a real ISO 8601 datetime from what the user said (e.g. "tomorrow at 3pm") using the current date/time given to you. type "reminder" just notifies at the time; type "message" actually performs `instruction` when due (e.g. "Send Ali on WhatsApp: don\'t forget the meeting").',
+  input_schema: {
+    type: 'object',
+    properties: {
+      title: { type: 'string' },
+      dueAtIso: { type: 'string', description: 'ISO 8601 datetime, e.g. 2026-08-29T15:00:00' },
+      recurrence: { type: 'string', enum: ['none', 'daily', 'weekdays', 'weekly', 'monthly'] },
+      type: { type: 'string', enum: ['reminder', 'message'] },
+      instruction: { type: 'string', description: 'Required for type "message" — the action to perform when due.' }
+    },
+    required: ['title', 'dueAtIso', 'recurrence', 'type']
+  }
+}
+const LIST_REMINDERS_TOOL: Tool = {
+  name: 'list_reminders',
+  description: 'Lists every upcoming reminder and scheduled message.',
+  input_schema: { type: 'object', properties: {} }
+}
+const CANCEL_REMINDER_TOOL: Tool = {
+  name: 'cancel_reminder',
+  description: 'Cancels a reminder or scheduled message by its exact title.',
+  input_schema: { type: 'object', properties: { title: { type: 'string' } }, required: ['title'] }
+}
 
 /** The physical/browser action tools every agent loop shares. Control-flow tools (when to stop,
  *  how to report completion) differ per caller and are added on top of this by each one. */
@@ -118,7 +145,10 @@ export const SHARED_TOOLS: Tool[] = [
   PRESS_KEY_TOOL,
   DEFINE_GRID_TOOL,
   CLICK_GRID_CELL_TOOL,
-  UNDO_LAST_TYPED_TEXT_TOOL
+  UNDO_LAST_TYPED_TEXT_TOOL,
+  CREATE_REMINDER_TOOL,
+  LIST_REMINDERS_TOOL,
+  CANCEL_REMINDER_TOOL
 ]
 
 /** Actions that are supposed to visibly change the page — worth a real before/after check rather
@@ -189,6 +219,12 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       const { status, message } = screenControl.undoLastTypedText()
       return { status, result: message }
     }
+    case 'create_reminder':
+      return createReminderTool(args)
+    case 'list_reminders':
+      return { result: listRemindersTool() }
+    case 'cancel_reminder':
+      return cancelReminderTool(String(args.title ?? ''))
     default:
       return { error: `Unrecognized action "${name}".` }
   }

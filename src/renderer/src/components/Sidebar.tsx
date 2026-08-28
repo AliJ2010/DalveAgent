@@ -1,4 +1,4 @@
-import { Globe, Plug, Zap, BookOpen, Settings } from 'lucide-react'
+import { Globe, Plug, Zap, BookOpen, CalendarDays, Settings } from 'lucide-react'
 import { useUiStore, type Screen } from '../state/uiStore'
 
 interface RailItem {
@@ -11,7 +11,8 @@ const TOP_ITEMS: RailItem[] = [
   { icon: Globe, screen: 'home', label: 'Home' },
   { icon: Plug, screen: 'integrations', label: 'Integrations' },
   { icon: Zap, screen: 'agents', label: 'Agents' },
-  { icon: BookOpen, screen: 'knowledge', label: 'Knowledge' }
+  { icon: BookOpen, screen: 'knowledge', label: 'Knowledge' },
+  { icon: CalendarDays, screen: 'calendar', label: 'Calendar' }
 ]
 
 export function Sidebar(): React.JSX.Element {

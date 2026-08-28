@@ -166,6 +166,8 @@ async function tick(goal: string): Promise<void> {
 
   const systemText = `You are DALVE, running a background task the user explicitly asked you to handle without them present: "${goal}". You have standing permission to act without asking for confirmation each time — but be conservative: never enter passwords/payment details/other credentials.
 
+Current date/time: ${new Date().toString()} — use this to resolve any relative time ("tomorrow", "in an hour") into a real ISO 8601 datetime if you call create_reminder.
+
 Real targeting priority, strongest to weakest — always use the strongest one that applies:
 1. browser_open + browser_click/browser_type/browser_read_text/browser_evaluate for ANYTHING that's a website (WhatsApp Web included). This is real DOM lookup by actual text, not a coordinate guess, running in DALVE's own dedicated automation browser (separate from the screenshot below) — it cannot mis-click a browser's own toolbar/tabs/account button, since that browser has no visible chrome for it to ever address. If a site needs login (e.g. WhatsApp Web's QR code) the user needs to do that once in that window — say so plainly if you hit a login wall you can't get past yourself.
 2. click_element for native desktop apps (not websites) with a visible label.

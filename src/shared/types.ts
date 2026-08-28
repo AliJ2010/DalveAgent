@@ -165,6 +165,29 @@ export type AutonomousTaskEvent =
    *  whenever a subtask's done state changes. */
   | { type: 'subtasks'; subtasks: Subtask[] }
 
+// --- Scheduler / calendar ---
+
+export type ScheduleRecurrence = 'none' | 'daily' | 'weekdays' | 'weekly' | 'monthly'
+
+export interface ScheduleItem {
+  id: string
+  title: string
+  /** 'reminder' just notifies at the due time. 'message' actually executes `instruction` (e.g.
+   *  "Send Ali on WhatsApp: don't forget the meeting") through the same one-shot agent loop
+   *  Telegram commands already use — real DOM/UI actions, not a fake "sent" claim. */
+  type: 'reminder' | 'message'
+  instruction?: string
+  /** Epoch ms of the next (or, for 'none', only) time this fires. */
+  dueAt: number
+  recurrence: ScheduleRecurrence
+  enabled: boolean
+  lastFiredAt?: number
+  /** What actually happened last time this fired — a notification confirmation for a reminder,
+   *  or the real result text for a message, so "did that actually send?" has a real answer. */
+  lastResult?: string
+  createdAt: number
+}
+
 export const PRIORITY_COMPOSIO_APPS: { key: string; name: string }[] = [
   { key: 'gmail', name: 'Gmail' },
   { key: 'stripe', name: 'Stripe' },

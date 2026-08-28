@@ -5,6 +5,8 @@ import type {
   AutonomousTaskEvent,
   ComposioCatalogEntry,
   HandFrame,
+  ScheduleItem,
+  ScheduleRecurrence,
   ScreenControlEvent,
   SettingsState,
   VoiceEvent
@@ -100,6 +102,24 @@ const dalveApi = {
       const listener = (): void => callback()
       ipcRenderer.on('agents:changed', listener)
       return () => ipcRenderer.removeListener('agents:changed', listener)
+    }
+  },
+  schedule: {
+    list: (): Promise<ScheduleItem[]> => ipcRenderer.invoke('schedule:list'),
+    add: (item: {
+      title: string
+      type: 'reminder' | 'message'
+      instruction?: string
+      dueAt: number
+      recurrence: ScheduleRecurrence
+    }): Promise<ScheduleItem> => ipcRenderer.invoke('schedule:add', item),
+    update: (id: string, patch: Partial<ScheduleItem>): Promise<ScheduleItem> =>
+      ipcRenderer.invoke('schedule:update', id, patch),
+    remove: (id: string): Promise<boolean> => ipcRenderer.invoke('schedule:remove', id),
+    onChanged: (callback: () => void): (() => void) => {
+      const listener = (): void => callback()
+      ipcRenderer.on('schedule:changed', listener)
+      return () => ipcRenderer.removeListener('schedule:changed', listener)
     }
   },
   voice: {

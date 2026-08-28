@@ -26,6 +26,8 @@ import { attachWindow as attachAgentStoreWindow } from './lib/agentStore'
 import { attachWindow as attachSettingsStoreWindow } from './lib/settingsStore'
 import { attachWindow as attachHandTrackingWindow, stop as stopHandTracking } from './lib/handTracking'
 import { attachWindow as attachSkillsStoreWindow } from './lib/skillsStore'
+import { attachWindow as attachScheduleStoreWindow } from './lib/scheduleStore'
+import { startScheduler } from './lib/scheduler'
 import { initAutoUpdate } from './lib/autoUpdate'
 import { initTelegramBridge } from './lib/telegramBridge'
 import { reconnectAll as reconnectMcpServers } from './lib/mcpClient'
@@ -156,6 +158,7 @@ function createWindow(): void {
   attachSettingsStoreWindow(mainWindow)
   attachHandTrackingWindow(mainWindow)
   attachSkillsStoreWindow(mainWindow)
+  attachScheduleStoreWindow(mainWindow)
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
@@ -210,6 +213,7 @@ if (gotSingleInstanceLock) {
     createTray()
     initAutoUpdate()
     initTelegramBridge()
+    startScheduler()
     void reconnectMcpServers()
 
     // Voice wake-word ("Hey DALVE") was tried via two different offline engines and dropped —

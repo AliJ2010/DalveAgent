@@ -19,6 +19,7 @@ import * as priceAxis from './priceAxis'
 import * as handTracking from './handTracking'
 import * as mcpClient from './mcpClient'
 import { skillsStore as skillsDb, isRecording, startRecording, stopRecording, recordStep, SKILL_META_TOOLS } from './skillsStore'
+import { createReminderTool, listRemindersTool, cancelReminderTool } from './scheduleStore'
 import * as uiAutomation from './uiAutomation'
 import * as ocr from './ocr'
 import * as gridTargeting from './gridTargeting'
@@ -297,6 +298,33 @@ const LIST_SKILLS_TOOL: FunctionDeclaration = {
   name: 'list_skills',
   description: 'Lists every recorded skill by name.',
   parametersJsonSchema: { type: 'object', properties: {} }
+}
+
+const CREATE_REMINDER_TOOL: FunctionDeclaration = {
+  name: 'create_reminder',
+  description:
+    'Schedules a reminder or recurring action for a future time, shown on the Calendar tab. Compute dueAtIso yourself as a real ISO 8601 datetime from what the user said (e.g. "tomorrow at 3pm") using the current date/time given to you at the start of this conversation. type "reminder" just notifies at the time; type "message" actually performs `instruction` when due (e.g. "Send Ali on WhatsApp: don\'t forget the meeting").',
+  parametersJsonSchema: {
+    type: 'object',
+    properties: {
+      title: { type: 'string' },
+      dueAtIso: { type: 'string', description: 'ISO 8601 datetime, e.g. 2026-08-29T15:00:00' },
+      recurrence: { type: 'string', enum: ['none', 'daily', 'weekdays', 'weekly', 'monthly'] },
+      type: { type: 'string', enum: ['reminder', 'message'] },
+      instruction: { type: 'string', description: 'Required for type "message" — the action to perform when due.' }
+    },
+    required: ['title', 'dueAtIso', 'recurrence', 'type']
+  }
+}
+const LIST_REMINDERS_TOOL: FunctionDeclaration = {
+  name: 'list_reminders',
+  description: 'Lists every upcoming reminder and scheduled message.',
+  parametersJsonSchema: { type: 'object', properties: {} }
+}
+const CANCEL_REMINDER_TOOL: FunctionDeclaration = {
+  name: 'cancel_reminder',
+  description: 'Cancels a reminder or scheduled message by its exact title.',
+  parametersJsonSchema: { type: 'object', properties: { title: { type: 'string' } }, required: ['title'] }
 }
 
 const BROWSER_OPEN_TOOL: FunctionDeclaration = {
@@ -607,6 +635,9 @@ async function buildToolsForAgent(agent: AgentConfig | null): Promise<Tool[]> {
     START_RECORDING_SKILL_TOOL,
     STOP_RECORDING_SKILL_TOOL,
     LIST_SKILLS_TOOL,
+    CREATE_REMINDER_TOOL,
+    LIST_REMINDERS_TOOL,
+    CANCEL_REMINDER_TOOL,
     LIST_AGENTS_TOOL,
     SWITCH_AGENT_TOOL,
     REMEMBER_FACT_TOOL,
@@ -726,10 +757,15 @@ export async function startVoiceSession(
     ? `\n\nFull transcript of everyone's recent conversations — yours AND every other agent's, each line labeled with who said it (User, DALVE, or another agent by name) — most recent last. This is how you stay aware as team lead: if the user asks what another agent has been up to, or references something they told a different agent, check here before saying you don't know. Reference it naturally, don't recite it:\n${journalContext}`
     : ''
   const registryNote = `\n\nAgents currently registered:\n${agentRegistrySnapshot()}`
+  // Accurate as of session start — good enough the same way it is for any assistant with a
+  // system-prompt-level date note; needed for create_reminder to resolve relative times
+  // ("tomorrow", "in an hour") into a real datetime.
+  const dateTimeNote = `\n\nCurrent date/time: ${new Date().toString()}`
   const systemPrompt =
     (agent ? agent.systemPrompt : DALVE_SYSTEM_PROMPT) +
     `\n\n${CHAIN_OF_COMMAND}` +
     registryNote +
+    dateTimeNote +
     memoryNote +
     journalNote
   const voiceName = agent ? agent.voice : settingsStore.getDalveVoice()
@@ -986,6 +1022,12 @@ async function handleToolCalls(functionCalls: FunctionCall[]): Promise<void> {
       } else if (fc.name === 'list_skills') {
         const skills = skillsDb.list()
         response = { result: skills.length === 0 ? 'No skills recorded yet.' : skills.map((s) => `- ${s.name} (${s.steps.length} steps)`).join('\n') }
+      } else if (fc.name === 'create_reminder') {
+        response = createReminderTool(args)
+      } else if (fc.name === 'list_reminders') {
+        response = { result: listRemindersTool() }
+      } else if (fc.name === 'cancel_reminder') {
+        response = cancelReminderTool(String(args.title ?? ''))
       } else if (fc.name === 'create_agent') {
         const type = args.type === 'bot' ? 'bot' : 'companion'
         const agent = agentStore.create({

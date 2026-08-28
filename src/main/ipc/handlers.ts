@@ -10,7 +10,8 @@ import * as autonomousTask from '../lib/autonomousTask'
 import * as cloudSync from '../lib/cloudSync'
 import * as handTracking from '../lib/handTracking'
 import * as mcpClient from '../lib/mcpClient'
-import type { AgentConfig, HandFrame } from '@shared/types'
+import { scheduleStore } from '../lib/scheduleStore'
+import type { AgentConfig, HandFrame, ScheduleItem, ScheduleRecurrence } from '@shared/types'
 
 export function registerIpcHandlers(): void {
   // Lets the UI show the real running version, e.g. to confirm an auto-update actually landed
@@ -252,6 +253,21 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('agents:restore', (_e, id: string) => agentStore.setArchived(id, false))
 
   ipcMain.handle('agents:remove', (_e, id: string) => agentStore.remove(id))
+
+  // --- Schedule (calendar tab: reminders + recurring messages) ---
+  ipcMain.handle('schedule:list', () => scheduleStore.list())
+
+  ipcMain.handle(
+    'schedule:add',
+    (
+      _e,
+      item: { title: string; type: 'reminder' | 'message'; instruction?: string; dueAt: number; recurrence: ScheduleRecurrence }
+    ) => scheduleStore.add(item)
+  )
+
+  ipcMain.handle('schedule:update', (_e, id: string, patch: Partial<ScheduleItem>) => scheduleStore.update(id, patch))
+
+  ipcMain.handle('schedule:remove', (_e, id: string) => scheduleStore.remove(id))
 
   // --- Voice (Gemini Live, or Groq+ElevenLabs — see settingsStore.voiceEngine) ---
   // Kept as two full, independent engines rather than one merged with branches throughout —

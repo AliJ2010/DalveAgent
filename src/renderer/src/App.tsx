@@ -6,6 +6,7 @@ import { TranscriptPanel } from './components/TranscriptPanel'
 import { IntegrationsScreen } from './components/IntegrationsScreen'
 import { SettingsScreen } from './components/SettingsScreen'
 import { KnowledgeScreen } from './components/KnowledgeScreen'
+import { CalendarScreen } from './components/CalendarScreen'
 import { AgentsCanvas } from './components/AgentsCanvas'
 import { ScreenControlOverlay } from './components/ScreenControlOverlay'
 import { HandTrackingController } from './components/HandTrackingController'
@@ -16,6 +17,7 @@ import { VersionPopup } from './components/VersionPopup'
 import { useUiStore } from './state/uiStore'
 import { useSettingsStore } from './state/settingsStore'
 import { useAgentsStore } from './state/agentsStore'
+import { useScheduleStore } from './state/scheduleStore'
 import { useAuthStore } from './state/authStore'
 import {
   initVoiceBridge,
@@ -43,14 +45,18 @@ function App(): React.JSX.Element {
     initWakeTriggerBridge()
     void useSettingsStore.getState().refresh()
     void useAgentsStore.getState().refresh()
+    void useScheduleStore.getState().refresh()
 
     // Cross-device sync landing while the app is open — a change made on another signed-in
     // device shows up here live instead of requiring a sign-out/sign-in to force a re-fetch.
+    // schedule:changed also fires locally whenever the scheduler itself fires/advances an item.
     const unsubSettings = window.dalve.settings.onChanged(() => void useSettingsStore.getState().refresh())
     const unsubAgents = window.dalve.agents.onChanged(() => void useAgentsStore.getState().refresh())
+    const unsubSchedule = window.dalve.schedule.onChanged(() => void useScheduleStore.getState().refresh())
     return () => {
       unsubSettings()
       unsubAgents()
+      unsubSchedule()
     }
   }, [authStatus])
 
@@ -97,6 +103,7 @@ function App(): React.JSX.Element {
           {screen === 'integrations' && <IntegrationsScreen />}
           {screen === 'agents' && <AgentsCanvas />}
           {screen === 'knowledge' && <KnowledgeScreen />}
+          {screen === 'calendar' && <CalendarScreen />}
           {screen === 'settings' && <SettingsScreen />}
 
           {screen === 'home' && (

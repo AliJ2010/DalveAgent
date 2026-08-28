@@ -22,6 +22,7 @@ import * as autonomousTask from './autonomousTask'
 import * as handTracking from './handTracking'
 import * as mcpClient from './mcpClient'
 import { skillsStore as skillsDb, isRecording, startRecording, stopRecording, recordStep, SKILL_META_TOOLS } from './skillsStore'
+import { createReminderTool, listRemindersTool, cancelReminderTool } from './scheduleStore'
 import type { AgentConfig, VoiceEvent } from '@shared/types'
 
 /**
@@ -326,7 +327,10 @@ async function runTurn(userText: string): Promise<void> {
   try {
     const client = getClient()
     const screenshot = await screenControl.captureScreenshotOnce(SCREENSHOT_QUALITY, SCREENSHOT_MAX_WIDTH)
-    const content: ChatCompletionContentPart[] = [{ type: 'text', text: userText }]
+    // Appended per-turn (not baked into the cached system message) so it's always accurate even
+    // in a session that's been open for hours — needed for create_reminder to resolve relative
+    // times ("tomorrow", "in an hour") correctly regardless of how long the session's been running.
+    const content: ChatCompletionContentPart[] = [{ type: 'text', text: `${userText}\n\n[Current date/time: ${new Date().toString()}]` }]
     if (screenshot) {
       content.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${screenshot}` } })
     }
@@ -587,6 +591,19 @@ const STATIC_TOOLS: ChatCompletionTool[] = [
   tool('stop_recording_skill', 'Stops recording and saves everything done since start_recording_skill as a named, replayable skill.', { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] }),
   tool('run_skill', 'Replays a previously recorded skill by name, step by step.', { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] }),
   tool('list_skills', 'Lists every recorded skill by name.', { type: 'object', properties: {} }),
+  tool('create_reminder', 'Schedules a reminder or recurring action for a future time, shown on the Calendar tab. Compute dueAtIso yourself as a real ISO 8601 datetime from what the user said, using the current date/time given to you each turn. type "reminder" just notifies at the time; type "message" actually performs `instruction` when due (e.g. "Send Ali on WhatsApp: don\'t forget the meeting").', {
+    type: 'object',
+    properties: {
+      title: { type: 'string' },
+      dueAtIso: { type: 'string', description: 'ISO 8601 datetime, e.g. 2026-08-29T15:00:00' },
+      recurrence: { type: 'string', enum: ['none', 'daily', 'weekdays', 'weekly', 'monthly'] },
+      type: { type: 'string', enum: ['reminder', 'message'] },
+      instruction: { type: 'string', description: 'Required for type "message" — the action to perform when due.' }
+    },
+    required: ['title', 'dueAtIso', 'recurrence', 'type']
+  }),
+  tool('list_reminders', 'Lists every upcoming reminder and scheduled message.', { type: 'object', properties: {} }),
+  tool('cancel_reminder', 'Cancels a reminder or scheduled message by its exact title.', { type: 'object', properties: { title: { type: 'string' } }, required: ['title'] }),
   tool('start_autonomous_task', 'Hands off a task to a background loop that keeps watching the screen and acting even after this conversation ends.', {
     type: 'object',
     properties: { goal: { type: 'string' } },
@@ -817,6 +834,12 @@ async function executeVoiceTool(name: string, args: Record<string, unknown>): Pr
       const skills = skillsDb.list()
       return { result: skills.length === 0 ? 'No skills recorded yet.' : skills.map((s) => `- ${s.name} (${s.steps.length} steps)`).join('\n') }
     }
+    case 'create_reminder':
+      return createReminderTool(args)
+    case 'list_reminders':
+      return { result: listRemindersTool() }
+    case 'cancel_reminder':
+      return cancelReminderTool(String(args.title ?? ''))
     case 'start_autonomous_task': {
       const goal = String(args.goal ?? '').trim()
       if (!goal) return { error: 'No goal given.' }

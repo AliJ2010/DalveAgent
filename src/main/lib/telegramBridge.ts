@@ -61,13 +61,17 @@ const ALL_TOOLS: Tool[] = [...SHARED_TOOLS, TASK_COMPLETE_TOOL]
 /** Runs one remote command to completion and returns the text to reply with. Mirrors
  *  autonomousTask.ts's tick() loop (same tools, same verify-by-diff discipline) but as a single
  *  bounded run instead of a recurring background check, with its own explicit completion signal
- *  instead of finish_cycle/mark_task_complete (there's no "next check" to defer to here). */
-async function runCommand(commandText: string): Promise<string> {
+ *  instead of finish_cycle/mark_task_complete (there's no "next check" to defer to here). Exported
+ *  so scheduler.ts can reuse the exact same real-execution path for a scheduled "message" item —
+ *  one tested implementation instead of a second hand-rolled agent loop. */
+export async function runCommand(commandText: string): Promise<string> {
   const apiKey = settingsStore.getAnthropicApiKey()
   if (!apiKey) return "I can't run remote commands yet — add a Claude API key in DALVE's Settings first."
   const anthropic = new Anthropic({ apiKey })
 
-  const systemText = `You are DALVE, replying to a text command sent remotely via Telegram — the user is away from their computer and can't watch or confirm anything, so figure it out and get a real result rather than narrating what you would do. Call task_complete with a clear, concise summary once you have the actual answer/result, or once you've genuinely determined the request can't be done from here (say why). Never enter passwords/payment details/other credentials — if something requires that, say so in the summary instead of attempting it.
+  const systemText = `You are DALVE, carrying out a command issued without anyone present to watch or confirm anything right now — either a remote Telegram message or a scheduled reminder/message firing on its own — so figure it out and get a real result rather than narrating what you would do. Call task_complete with a clear, concise summary once you have the actual answer/result, or once you've genuinely determined the request can't be done from here (say why). Never enter passwords/payment details/other credentials — if something requires that, say so in the summary instead of attempting it.
+
+Current date/time: ${new Date().toString()}.
 
 Real targeting priority, strongest to weakest — always use the strongest one that applies:
 1. browser_open + browser_click/browser_type/browser_read_text/browser_evaluate for ANYTHING that's a website.
