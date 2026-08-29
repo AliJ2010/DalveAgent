@@ -1,7 +1,6 @@
 import * as THREE from 'three'
 import type { NormalizedLandmark } from '@mediapipe/tasks-vision'
-
-export type ArObjectType = 'microwave'
+import type { ArBlueprint, ArBlueprintPart } from '@shared/types'
 
 /** One tracked-hand frame's gesture distances, same shape HandTrackingController already
  *  computes every frame for the main-process cursor path — reused here so both consumers read
@@ -38,71 +37,95 @@ interface GrabState {
   startDoorAngle: number
   startSpread: number
   startScale: number
+  doorTarget: THREE.Object3D | null
 }
 
-function makeMicrowave(): THREE.Group {
+function makeGeometry(part: ArBlueprintPart): THREE.BufferGeometry {
+  const [a, b, c] = part.size
+  if (part.shape === 'cylinder') return new THREE.CylinderGeometry(Math.max(0.001, a), Math.max(0.001, b), Math.max(0.001, c), 24)
+  if (part.shape === 'sphere') return new THREE.SphereGeometry(Math.max(0.001, a), 20, 16)
+  return new THREE.BoxGeometry(Math.max(0.001, a), Math.max(0.001, b), Math.max(0.001, c))
+}
+
+/**
+ * Builds a real THREE.Group hierarchy from a blueprint — the SAME generic path handles a
+ * hand-authored built-in (see BUILTIN_BLUEPRINTS below) and one an AI just generated from a
+ * screenshot, so "unlimited object types" is a content problem (more/better blueprints), not an
+ * engine one. A part attaches to whatever `parentId` names; a 'door' part gets a hinge pivot Group
+ * inserted so it swings around its hinge axis instead of spinning in place, and anything (like a
+ * handle) that names a door as ITS parent attaches to that same pivot, so they move together.
+ */
+function buildFromBlueprint(blueprint: ArBlueprint): THREE.Group {
   const root = new THREE.Group()
+  const nodesById = new Map<string, THREE.Object3D>()
+  const remaining = new Map(blueprint.parts.map((p) => [p.id, p]))
 
-  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x1c1a16, metalness: 0.6, roughness: 0.35 })
-  const accentMat = new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.8, roughness: 0.25 })
-  const glassMat = new THREE.MeshStandardMaterial({
-    color: 0x0a0908,
-    metalness: 0.2,
-    roughness: 0.1,
-    transparent: true,
-    opacity: 0.55
-  })
-
-  const body = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1, 1.1), bodyMat)
-  body.userData.part = 'body'
-  root.add(body)
-
-  // Door hinges on its LEFT edge, so it's parented to a pivot Group placed at that edge (not at
-  // the door's own center) — rotating the pivot swings the door like a real hinge instead of
-  // spinning it in place around its own middle.
-  const doorPivot = new THREE.Group()
-  doorPivot.position.set(-0.62, 0, 0.56)
-  root.add(doorPivot)
-
-  const door = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.86, 0.05), glassMat)
-  door.position.set(0.6, 0, 0)
-  door.userData.part = 'door'
-  doorPivot.add(door)
-
-  const handle = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.6, 0.12), accentMat)
-  handle.position.set(1.14, 0, 0.05)
-  handle.userData.part = 'handle'
-  doorPivot.add(handle)
-
-  const panel = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.9, 0.04), bodyMat)
-  panel.position.set(0.66, 0, 0.57)
-  root.add(panel)
-
-  const buttonColors = [0xe05a5a, 0x6fe08a, 0xd4af37]
-  for (let i = 0; i < 3; i++) {
-    const btn = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.06, 0.06, 0.04, 16),
-      new THREE.MeshStandardMaterial({ color: buttonColors[i], metalness: 0.4, roughness: 0.4 })
-    )
-    btn.rotation.x = Math.PI / 2
-    btn.position.set(0.66, 0.28 - i * 0.28, 0.6)
-    btn.userData.part = 'button'
-    btn.userData.buttonIndex = i
-    btn.userData.restZ = btn.position.z
-    root.add(btn)
+  function attachNode(part: ArBlueprintPart, node: THREE.Object3D, parent: THREE.Object3D): void {
+    node.position.set(...part.position)
+    if (part.rotation) node.rotation.set(...part.rotation)
+    parent.add(node)
+    nodesById.set(part.id, node)
   }
 
-  const turntable = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.42, 0.42, 0.02, 32),
-    new THREE.MeshStandardMaterial({ color: 0x3a3630, metalness: 0.3, roughness: 0.5 })
-  )
-  turntable.rotation.x = Math.PI / 2
-  turntable.position.set(0.15, -0.35, 0.4)
-  turntable.userData.part = 'turntable'
-  root.add(turntable)
+  function buildPart(part: ArBlueprintPart, parent: THREE.Object3D): void {
+    if (part.role === 'door') {
+      const pivot = new THREE.Group()
+      attachNode(part, pivot, parent)
+      const mesh = new THREE.Mesh(
+        makeGeometry(part),
+        new THREE.MeshStandardMaterial({
+          color: part.color,
+          metalness: part.metalness ?? 0.3,
+          roughness: part.roughness ?? 0.4,
+          transparent: (part.roughness ?? 1) < 0.3,
+          opacity: (part.roughness ?? 1) < 0.3 ? 0.55 : 1
+        })
+      )
+      mesh.position.set(...(part.hingeOffset ?? [0, 0, 0]))
+      mesh.userData.part = 'door'
+      pivot.add(mesh)
+      // Other parts (a handle) that name this door as their parent attach to the PIVOT, not the
+      // mesh, so they swing together — a handle keeps its position relative to the hinge axis,
+      // matching how the mesh's own hingeOffset already works.
+      return
+    }
+    const mesh = new THREE.Mesh(
+      makeGeometry(part),
+      new THREE.MeshStandardMaterial({ color: part.color, metalness: part.metalness ?? 0.3, roughness: part.roughness ?? 0.4 })
+    )
+    mesh.userData.part = part.role ?? 'static'
+    if (part.role === 'button') {
+      mesh.userData.buttonRestZ = part.position[2]
+    }
+    attachNode(part, mesh, parent)
+  }
 
-  root.userData.doorPivot = doorPivot
-  root.userData.turntable = turntable
+  // Multi-pass resolution so parts can be listed in any order (matters most for AI-generated
+  // JSON, which has no reason to output parents before children) — each pass attaches whatever
+  // now has a resolved parent, until nothing changes; anything left over (a bad/cyclic parentId)
+  // falls back to the root rather than silently vanishing.
+  let progressed = true
+  while (remaining.size > 0 && progressed) {
+    progressed = false
+    for (const [id, part] of Array.from(remaining.entries())) {
+      const parentNode = part.parentId ? nodesById.get(part.parentId) : root
+      if (part.parentId && !parentNode) continue
+      buildPart(part, parentNode ?? root)
+      remaining.delete(id)
+      progressed = true
+    }
+  }
+  for (const part of remaining.values()) buildPart(part, root)
+
+  // A handle's hinge target is whichever door pivot its OWN parentId points at — resolved after
+  // the tree is built since the handle and its door can be built in either order above.
+  for (const part of blueprint.parts) {
+    if (part.role !== 'handle' || !part.parentId) continue
+    const handleNode = nodesById.get(part.id)
+    const doorPivot = nodesById.get(part.parentId)
+    if (handleNode && doorPivot) handleNode.userData.hingeTarget = doorPivot
+  }
+
   return root
 }
 
@@ -121,7 +144,7 @@ export class SpatialEngine {
   private raycaster = new THREE.Raycaster()
   private object: THREE.Group | null = null
   private grab: GrabState | null = null
-  private buttonFlash = new Map<number, number>()
+  private buttonFlash = new Map<THREE.Object3D, number>()
   private rafId: number | null = null
   private disposed = false
 
@@ -143,10 +166,10 @@ export class SpatialEngine {
     this.loop()
   }
 
-  spawn(type: ArObjectType): void {
+  spawn(blueprint: ArBlueprint): void {
     this.clear()
-    if (type === 'microwave') this.object = makeMicrowave()
-    if (this.object) this.scene.add(this.object)
+    this.object = buildFromBlueprint(blueprint)
+    this.scene.add(this.object)
   }
 
   clear(): void {
@@ -163,6 +186,7 @@ export class SpatialEngine {
     }
     this.object = null
     this.grab = null
+    this.buttonFlash.clear()
   }
 
   resize(width: number, height: number): void {
@@ -202,15 +226,31 @@ export class SpatialEngine {
 
     if (!this.grab) {
       if (pinchIndex < PINCH_ENGAGE) {
-        const part = this.hitTest(ndcX, ndcY)?.userData.part as string | undefined
-        // The closed door's glass sits directly in front of most of the body's front face — a
-        // pinch dead-center on the object is just as likely to land on the door as the body
-        // (confirmed live: identical coordinates hit one or the other depending on tiny
-        // sub-pixel differences). Grabbing the glass front to move the whole object is exactly
-        // what real-world intuition expects (you don't need to find the one bare edge of the
-        // body specifically), so a door hit falls through to the same move-grab as a body hit —
-        // the handle stays the only way to open it.
-        if (part === 'body' || part === 'door') {
+        const targetHit = this.hitTest(ndcX, ndcY)
+        const part = targetHit?.userData.part as string | undefined
+        if (part === 'handle') {
+          const hingeTarget = targetHit?.userData.hingeTarget as THREE.Object3D | undefined
+          if (hingeTarget) {
+            this.grab = {
+              mode: 'door',
+              startHandX: handX,
+              startHandY: handY,
+              startObjectX: 0,
+              startObjectY: 0,
+              startRotationY: 0,
+              startDoorAngle: hingeTarget.rotation.y,
+              startSpread: spread,
+              startScale: 1,
+              doorTarget: hingeTarget
+            }
+          }
+        } else if (part === 'button') {
+          if (targetHit) this.buttonFlash.set(targetHit, performance.now())
+        } else if (part !== undefined) {
+          // Anything else grabbable (body, or any decorative/static part covering the front of
+          // the object — a closed door's glass, a lampshade) moves the whole object. Real objects
+          // don't have one narrow "correct" spot to grab; direct feedback confirmed a closed
+          // door's glass alone covers most of a front face and needs to work as a grab target too.
           this.grab = {
             mode: 'move',
             startHandX: handX,
@@ -220,31 +260,15 @@ export class SpatialEngine {
             startRotationY: 0,
             startDoorAngle: 0,
             startSpread: spread,
-            startScale: this.object.scale.x
+            startScale: this.object.scale.x,
+            doorTarget: null
           }
-        } else if (part === 'handle') {
-          const doorPivot = this.object.userData.doorPivot as THREE.Group
-          this.grab = {
-            mode: 'door',
-            startHandX: handX,
-            startHandY: handY,
-            startObjectX: 0,
-            startObjectY: 0,
-            startRotationY: 0,
-            startDoorAngle: doorPivot.rotation.y,
-            startSpread: spread,
-            startScale: 1
-          }
-        } else if (part === 'button') {
-          const btn = this.hitTest(ndcX, ndcY)
-          const idx = btn?.userData.buttonIndex as number | undefined
-          if (idx !== undefined) this.buttonFlash.set(idx, performance.now())
         }
       } else if (pinchMiddle < PINCH_ENGAGE && hoveredPart === undefined) {
-        // Rotate engages off a body hover check separately below (needs its own hit test since
-        // the shared `hit` above requires BOTH pinches released to avoid stealing a move-grab).
+        // Rotate engages off its own hit test (needs the shared `hit` above to require BOTH
+        // pinches released, so it doesn't steal a move-grab already in progress).
         const part = this.hitTest(ndcX, ndcY)?.userData.part as string | undefined
-        if (part === 'body' || part === 'door') {
+        if (part !== undefined && part !== 'handle' && part !== 'button') {
           this.grab = {
             mode: 'rotate',
             startHandX: handX,
@@ -254,7 +278,8 @@ export class SpatialEngine {
             startRotationY: this.object.rotation.y,
             startDoorAngle: 0,
             startSpread: spread,
-            startScale: 1
+            startScale: 1,
+            doorTarget: null
           }
         }
       }
@@ -275,17 +300,13 @@ export class SpatialEngine {
       } else if (this.grab.mode === 'rotate') {
         const dx = handX - this.grab.startHandX
         this.object.rotation.y = this.grab.startRotationY + dx * ROTATE_SENSITIVITY
-      } else if (this.grab.mode === 'door') {
-        // The hinge is on the object's left edge and the handle on the right — as the door swings
-        // open (rotation.y going negative, see makeMicrowave's geometry), the handle's world
-        // position arcs toward the hinge, which projects to moving LEFT on screen. So a leftward
-        // drag (handX decreasing, dx negative) must DECREASE rotation.y — a `-` here would instead
-        // require a rightward "push away from the hinge" to open it, which is backwards from how
-        // pulling a handle actually reads (confirmed via a live interaction test where this exact
-        // sign was wrong and the door only ever clamped to closed).
+      } else if (this.grab.mode === 'door' && this.grab.doorTarget) {
+        // A leftward drag (handX decreasing, dx negative) must DECREASE rotation.y — confirmed
+        // live via a real interaction test: the opposite sign only ever clamped back to closed,
+        // because pulling toward the hinge (the physically correct "open" motion) needs to swing
+        // the pivot negative, not positive.
         const dx = handX - this.grab.startHandX
-        const doorPivot = this.object.userData.doorPivot as THREE.Group
-        doorPivot.rotation.y = Math.min(
+        this.grab.doorTarget.rotation.y = Math.min(
           0,
           Math.max(-DOOR_MAX_OPEN, this.grab.startDoorAngle + dx * DOOR_DRAG_SENSITIVITY)
         )
@@ -296,21 +317,18 @@ export class SpatialEngine {
   private loop = (): void => {
     if (this.disposed) return
     if (this.object) {
-      const turntable = this.object.userData.turntable as THREE.Mesh | undefined
-      if (turntable) turntable.rotation.z += 0.01
-
       const now = performance.now()
-      for (const child of this.object.children) {
-        if (child.userData.part !== 'button') continue
-        const pressedAt = this.buttonFlash.get(child.userData.buttonIndex)
-        const restZ = child.userData.restZ as number
+      this.object.traverse((child) => {
+        if (child.userData.part !== 'button') return
+        const pressedAt = this.buttonFlash.get(child)
+        const restZ = child.userData.buttonRestZ as number
         if (pressedAt !== undefined && now - pressedAt < 220) {
           child.position.z = restZ - 0.025
         } else {
           child.position.z = restZ
-          if (pressedAt !== undefined) this.buttonFlash.delete(child.userData.buttonIndex)
+          if (pressedAt !== undefined) this.buttonFlash.delete(child)
         }
-      }
+      })
     }
     this.renderer.render(this.scene, this.camera)
     this.rafId = requestAnimationFrame(this.loop)

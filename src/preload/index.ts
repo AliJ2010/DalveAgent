@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import type {
   AgentConfig,
+  ArBlueprint,
   AutonomousTaskEvent,
   BuiltinWakeWord,
   ComposioCatalogEntry,
@@ -189,6 +190,7 @@ const dalveApi = {
   handTracking: {
     stop: (): Promise<{ status: 'SUCCESS'; message: string }> => ipcRenderer.invoke('handTracking:stop'),
     sendFrame: (frame: HandFrame): void => ipcRenderer.send('handTracking:frame', frame),
+    reportStopped: (): void => ipcRenderer.send('handTracking:rendererStopped'),
     onStart: (callback: () => void): (() => void) => {
       const listener = (): void => callback()
       ipcRenderer.on('handTracking:start', listener)
@@ -202,8 +204,8 @@ const dalveApi = {
   },
   ar: {
     clear: (): Promise<{ status: 'SUCCESS'; message: string }> => ipcRenderer.invoke('ar:clear'),
-    onSpawn: (callback: (type: string) => void): (() => void) => {
-      const listener = (_e: Electron.IpcRendererEvent, type: string): void => callback(type)
+    onSpawn: (callback: (blueprint: ArBlueprint) => void): (() => void) => {
+      const listener = (_e: Electron.IpcRendererEvent, blueprint: ArBlueprint): void => callback(blueprint)
       ipcRenderer.on('ar:spawn', listener)
       return () => ipcRenderer.removeListener('ar:spawn', listener)
     },

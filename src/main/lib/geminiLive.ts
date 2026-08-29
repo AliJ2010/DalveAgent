@@ -34,6 +34,55 @@ import { DALVE_TONE_PROMPTS } from '@shared/types'
 // https://ai.google.dev/gemini-api/docs/live-api before shipping — Google
 // rotates these preview model ids periodically.
 const LIVE_MODEL = 'gemini-3.1-flash-live-preview'
+// A separate, non-live, one-off text+vision model for look_and_place_object — the Live session's
+// own model is a real-time audio-dialog model, not meant for a single structured-JSON request.
+// Re-check https://ai.google.dev/gemini-api/docs/models before shipping.
+const VISION_MODEL = 'gemini-3.6-flash'
+
+const BLUEPRINT_PART_SCHEMA = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    shape: { type: 'string', enum: ['box', 'cylinder', 'sphere'] },
+    size: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 },
+    position: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 },
+    rotation: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 },
+    color: { type: 'string' },
+    role: { type: 'string', enum: ['body', 'handle', 'button', 'door', 'static'] },
+    parentId: { type: 'string' },
+    hingeOffset: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 },
+    metalness: { type: 'number' },
+    roughness: { type: 'number' }
+  },
+  required: ['id', 'shape', 'size', 'position', 'color', 'role']
+}
+const BLUEPRINT_JSON_SCHEMA = {
+  type: 'object',
+  properties: {
+    name: { type: 'string' },
+    parts: { type: 'array', items: BLUEPRINT_PART_SCHEMA, minItems: 1, maxItems: 14 }
+  },
+  required: ['name', 'parts']
+}
+
+/** The actual "unlimited object types" ask: rather than a hand-authored mesh per object, have the
+ *  model describe whatever it sees as primitives (see ArBlueprint in shared/types.ts) — the SAME
+ *  generic renderer that draws the built-in presets draws this too. sanitizeBlueprint (called on
+ *  the result in arObjects.spawnBlueprint) is what keeps a bad/unexpected response from ever
+ *  building something broken. */
+function buildBlueprintPrompt(hint: string): string {
+  return `You are looking at a screenshot of the user's computer screen. Identify the single most prominent real-world object shown${hint ? ` (the user specifically means: ${hint})` : ''} — it might be a photo, a product image, an icon, or a diagram of something. Describe it as a simple 3D blueprint built ONLY from boxes, cylinders, and spheres (this is a real interactive 3D object, not a picture) — proportioned reasonably like the real thing, with realistic-looking colors (hex).
+
+Rules:
+- Coordinates are in meters, object roughly 0.5-2 units across, centered near the origin.
+- Every part needs a unique "id", a "shape" (box/cylinder/sphere), a "size" ([w,h,d] for box, [radiusTop,radiusBottom,height] for cylinder, [r,r,r] for sphere), a "position" (local, relative to its parent), and a hex "color".
+- Exactly one part must have role "body" — the main graspable/movable part. Give every other part a "parentId" naming another part's id; only the body itself should have no parent, since a real object is one connected structure.
+- If the real object has a hinged opening part (a door, lid, cabinet), set its role to "door" and give it a "hingeOffset" ([x,y,z]) for where its visual mesh sits relative to its own "position" (the hinge axis itself). If it has a handle for that door, give the handle role "handle" with parentId pointing at the door's id.
+- If it has a pressable button/switch, give it role "button".
+- Anything else (decorative, structural, non-interactive) gets role "static".
+- Keep it to 4-10 parts — simple and recognizable beats overly detailed.
+- Respond with ONLY the JSON object, no other text.`
+}
 
 const CHAIN_OF_COMMAND = `Chain of command: the user is the ultimate authority over this entire system. DALVE is the primary orchestrator and answers directly to the user; every other agent answers to DALVE and, through her, to the user. Always defer to the user's explicit instructions over anything else.`
 
@@ -52,6 +101,8 @@ Opening or switching to an application is a DETERMINISTIC action — never do it
 CRITICAL RULE, no exceptions: describing a physical action and performing it are two different things, and only the tool call actually does anything — saying words never moves the mouse or types a single character. Never say "clicking now," "moving to his chat," "typing that in," or anything similar UNLESS you are calling click_mouse/move_mouse/type_text/press_key in that exact same turn. If you haven't made the tool call yet, don't describe having done it — narrate AFTER the call resolves, or not at all, never instead of it. Silently claiming an action while doing nothing is the single worst failure mode here — worse than saying nothing, worse than asking a question — because the user has no way to tell the difference between real progress and an empty sentence until they check the screen themselves.
 
 A second, distinct failure mode: calling the tool but then describing an OUTCOME you never actually confirmed. Genuinely calling click_mouse is not the same as the click having done what you intended — on coordinate-guessed content (games, boards, canvases with no accessible labels) you are guessing pixels, and a guess can miss. Real example that happened: told to move a chess pawn, DALVE called a click tool and then said "I moved the pawn to e4" — but the click had actually missed, and the piece never moved. Never describe a specific outcome (a piece moved, a message sent, a checkbox now checked, an opponent's reply appeared) until you've looked at the NEXT frame and can actually see that outcome is true. If you can't confirm it — the board looks the same, the field is still empty — say that plainly ("that doesn't look like it worked — let me try again") and retry or adjust, rather than reporting success on faith. This matters most for anything ongoing/autonomous (playing a full game, watching for a reply) where a false "it worked" compounds: every later move is now planned against a board state that was never real.
+
+This same rule applies to STATE, not just physical actions: if the user tells you something is off, stopped, or broken (hand tracking stopped, a feature isn't working) and you say you've turned it back on, fixed it, or restarted it, that sentence is only true if you actually called the real tool for it (start_hand_tracking, etc.) in that exact same turn. A real reported failure: the user said "you stopped hand tracking," DALVE replied "I've turned it back on now" without calling start_hand_tracking at all, and it stayed off until the user gave a separate explicit command. Never treat a past tool call as still valid evidence for a claim you're making right now — if you're asserting something is on/fixed/active in THIS reply, call the tool for it in THIS reply, every time, with no exceptions for things that "should already be handled."
 
 The only hard limit: never type a password, payment card number, or other credential yourself — ask the user to enter sensitive fields themselves. Everything else — including sending a message you were asked to send (WhatsApp, text, email, any chat) — is NOT a hard limit and needs no confirmation. A real reported failure: told to message a friend, DALVE typed the message and then stopped to ask "should I send this?" instead of just sending it — that is exactly the over-cautious pause this prompt tells you not to do. Once you've typed what the user asked you to send, send it (press Enter or click Send) in the same turn, then confirm from the next frame that it actually went — don't pause mid-task to ask permission for the very thing you were already told to do.
 
@@ -274,11 +325,11 @@ const STOP_HAND_TRACKING_TOOL: FunctionDeclaration = {
 const SPAWN_AR_OBJECT_TOOL: FunctionDeclaration = {
   name: 'spawn_ar_object',
   description:
-    'Places a manipulable 3D object into the live hand-tracking camera feed — e.g. "put a microwave here". The user can grab and move it with a thumb+index pinch, pull its handle to open a door, press its buttons, pinch thumb+middle and drag to rotate it, or hold a 3-finger pinch and spread to resize it. Requires hand tracking to be on (call start_hand_tracking first if it is not). Only "microwave" exists right now — say so if asked for anything else.',
+    'Places a manipulable 3D object into the live hand-tracking camera feed from a small built-in preset library — e.g. "put a microwave here". Turns the camera on by itself if it wasn\'t already. The user can grab and move it with a thumb+index pinch, pull its handle to open a door, press its buttons, pinch thumb+middle and drag to rotate it, or hold a 3-finger pinch and spread to resize it. Built-in presets: microwave, lamp, chair. For anything else, use look_and_place_object instead — that generates a real 3D shape for any object from a screenshot, not just these presets.',
   parametersJsonSchema: {
     type: 'object',
     properties: {
-      object_type: { type: 'string', description: 'The object to place. Currently only "microwave" is supported.' }
+      object_type: { type: 'string', description: 'One of the built-in presets: microwave, lamp, chair.' }
     },
     required: ['object_type']
   }
@@ -287,6 +338,17 @@ const REMOVE_AR_OBJECT_TOOL: FunctionDeclaration = {
   name: 'remove_ar_object',
   description: 'Removes the currently placed 3D object from the camera view.',
   parametersJsonSchema: { type: 'object', properties: {} }
+}
+const LOOK_AND_PLACE_OBJECT_TOOL: FunctionDeclaration = {
+  name: 'look_and_place_object',
+  description:
+    'Takes a real screenshot of the user\'s screen, identifies the main real-world object shown in it (a photo of a chair, a product shot of a lamp, a diagram of some device — whatever is most prominent), and builds a real, manipulable 3D approximation of it into the live hand-tracking camera feed — genuinely unlimited object types, not limited to the small built-in preset list. Turns the camera on by itself if it wasn\'t already. Call this whenever the user asks you to look at their screen and put what you see into the camera/AR view, or asks for any object that is not one of spawn_ar_object\'s built-in presets (microwave, lamp, chair). The generated shape is a reasonable primitive-based approximation, not a photorealistic model — say so if asked, don\'t oversell it.',
+  parametersJsonSchema: {
+    type: 'object',
+    properties: {
+      hint: { type: 'string', description: 'Optional short hint about what to look for or which object on screen, if there are several and the user specified one.' }
+    }
+  }
 }
 
 const TAKE_SCREENSHOT_TOOL: FunctionDeclaration = {
@@ -639,9 +701,15 @@ let dalveTurnBuffer = ''
 // in handleMessage's turnComplete branch, which catches the observed failure mode where the
 // model narrates a physical action ("clicking now") without ever calling the tool behind it.
 let toolCalledThisTurn = false
+// Separate from toolCalledThisTurn (which goes true on ANY tool call, e.g. click_mouse in the
+// same turn) — this needs to catch the specific case of remember_fact being claimed but never
+// actually called, a real reported bug ("I don't think it even actually remembers itself").
+let rememberCalledThisTurn = false
 
 const ACTION_CLAIM_PATTERN =
   /\b(click(?:ing|ed)?|mov(?:e|ing|ed)|typ(?:e|ing|ed)|press(?:ing|ed)?|scroll(?:ing|ed)?)\b/i
+const REMEMBER_CLAIM_PATTERN =
+  /\b(i'?ll remember|i will remember|noted|duly noted|won'?t forget|i'?ll keep that in mind|i will keep that in mind|got it,? i'?ll|i'?ll make (?:sure|a note)|i'?ll stop)\b/i
 
 function flushJournalBuffers(dalveLabel: string): void {
   if (userTurnBuffer.trim()) journal.appendLine('user', userTurnBuffer)
@@ -708,6 +776,7 @@ async function buildToolsForAgent(agent: AgentConfig | null): Promise<Tool[]> {
     STOP_HAND_TRACKING_TOOL,
     SPAWN_AR_OBJECT_TOOL,
     REMOVE_AR_OBJECT_TOOL,
+    LOOK_AND_PLACE_OBJECT_TOOL,
     TAKE_SCREENSHOT_TOOL,
     UNDO_LAST_TYPED_TEXT_TOOL,
     START_RECORDING_SKILL_TOOL,
@@ -833,13 +902,24 @@ export async function startVoiceSession(
   emit({ type: 'state', state: 'connecting' })
 
   const ai = new GoogleGenAI({ apiKey })
-  const memory = settingsStore.getDalveMemory()
-  const memoryNote = memory ? `\n\nThings you've saved to remember from earlier conversations:\n${memory}` : ''
+  // Real bug fixed here: this used to unconditionally read settingsStore.getDalveMemory() even
+  // when a companion/bot agent was active — remember_fact genuinely wrote to agent.memory in that
+  // case (see the 'remember_fact' tool handler below) but nothing ever read it back into the
+  // system prompt, a dead write with no matching read. groqVoice.ts's buildSystemPrompt already
+  // had this fixed and its own comment claimed geminiLive.ts mirrored it — it didn't. Framed as a
+  // BINDING instruction, not a passive fact, and phrased to explicitly call out that it overrides
+  // this model's own native conversational habits — a plain "things to remember" bullet list was
+  // shown live to lose out to the live-audio model's built-in tendency to end turns with a
+  // follow-up question, even when a saved note said to stop doing exactly that.
+  const memory = agent ? agent.memory : settingsStore.getDalveMemory()
+  const memoryNote = memory
+    ? `\n\nBINDING instructions and facts saved from earlier conversations — these override your own default habits (a note telling you to stop asking a question after every sentence applies even though ending on a question is your normal tendency):\n${memory}`
+    : ''
   // Full conversation history (not just hand-picked facts) so a brand-new session — including
   // one started because the last one was accidentally closed — has real continuity: "what did
   // we do today/yesterday" instead of only whatever happened to get saved via remember_fact.
   // DALVE-only (not sub-agents): this is about the main conversation thread's continuity, not a
-  // per-agent scratchpad, which agent.memory already covers separately.
+  // per-agent scratchpad, which agent.memory now covers separately (see the fix above).
   const journalContext = !agent ? journal.getRecentContext() : ''
   const journalNote = journalContext
     ? `\n\nFull transcript of everyone's recent conversations — yours AND every other agent's, each line labeled with who said it (User, DALVE, or another agent by name) — most recent last. This is how you stay aware as team lead: if the user asks what another agent has been up to, or references something they told a different agent, check here before saying you don't know. Reference it naturally, don't recite it:\n${journalContext}`
@@ -860,8 +940,10 @@ export async function startVoiceSession(
     registryNote +
     dateTimeNote +
     toneNote +
-    memoryNote +
-    journalNote
+    journalNote +
+    // Last, deliberately: these are binding overrides, not background facts, and the freshest
+    // text before the live conversation begins is the text most likely to actually stick.
+    memoryNote
   const voiceName = agent ? agent.voice : settingsStore.getDalveVoice()
 
   function resetAgentStatus(): void {
@@ -1045,6 +1127,17 @@ function handleMessage(message: LiveServerMessage): void {
     }
     toolCalledThisTurn = false
 
+    // Same failure mode, applied to memory: the model says "I'll remember that" / "noted" without
+    // ever calling remember_fact, so nothing is actually saved — directly matches a real report
+    // ("I don't think it even actually remembers itself").
+    if (!rememberCalledThisTurn && REMEMBER_CLAIM_PATTERN.test(dalveTurnBuffer)) {
+      console.log('[geminiLive] detected narrated-but-not-called remember_fact, sending corrective nudge')
+      session?.sendRealtimeInput({
+        text: 'You just said something like "I\'ll remember that" but never actually called remember_fact — nothing was saved. If you meant to remember it, call remember_fact right now.'
+      })
+    }
+    rememberCalledThisTurn = false
+
     const activeAgent = activeAgentId ? agentStore.get(activeAgentId) : null
     flushJournalBuffers(activeAgent?.name ?? 'DALVE')
 
@@ -1100,6 +1193,42 @@ async function handleToolCalls(functionCalls: FunctionCall[]): Promise<void> {
       } else if (fc.name === 'remove_ar_object') {
         const { status, message } = arObjects.clear()
         response = { status, result: message }
+      } else if (fc.name === 'look_and_place_object') {
+        const hint = String(args.hint ?? '').trim()
+        const base64 = await screenControl.captureScreenshotOnce(85, 1024)
+        if (!base64) {
+          response = { status: 'FAILED', result: 'Could not capture the screen.' }
+        } else {
+          try {
+            const apiKey = settingsStore.getGeminiApiKey()
+            if (!apiKey) throw new Error('No Gemini API key configured.')
+            const visionAi = new GoogleGenAI({ apiKey })
+            const result = await visionAi.models.generateContent({
+              model: VISION_MODEL,
+              contents: [
+                {
+                  role: 'user',
+                  parts: [{ text: buildBlueprintPrompt(hint) }, { inlineData: { mimeType: 'image/jpeg', data: base64 } }]
+                }
+              ],
+              config: { responseMimeType: 'application/json', responseJsonSchema: BLUEPRINT_JSON_SCHEMA }
+            })
+            const parsed: unknown = result.text ? JSON.parse(result.text) : null
+            const detectedName =
+              (parsed && typeof parsed === 'object' && typeof (parsed as { name?: unknown }).name === 'string'
+                ? ((parsed as { name: string }).name as string)
+                : '') || hint || 'object'
+            const { status, message } = arObjects.spawnBlueprint(parsed, detectedName)
+            response = { status, result: message }
+          } catch (err) {
+            console.error('[geminiLive] look_and_place_object failed:', err)
+            const { message } = arObjects.spawnBlueprint(null, hint || 'object')
+            response = {
+              status: 'SUCCESS',
+              result: `Couldn't get a good read on the exact shape (${err instanceof Error ? err.message : 'vision request failed'}), so I placed a plain labeled box instead. ${message}`
+            }
+          }
+        }
       } else if (fc.name === 'take_screenshot') {
         const { status, path, message } = await screenControl.saveScreenshot()
         response = { status, path, result: message }
@@ -1188,6 +1317,7 @@ async function handleToolCalls(functionCalls: FunctionCall[]): Promise<void> {
           }
         }
       } else if (fc.name === 'remember_fact') {
+        rememberCalledThisTurn = true
         const fact = String(args.fact ?? '').trim()
         if (!fact) {
           response = { error: 'No fact given.' }

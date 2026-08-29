@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { HandLandmarker, FilesetResolver, type NormalizedLandmark } from '@mediapipe/tasks-vision'
 import { Hand, Square, Move } from 'lucide-react'
-import { SpatialEngine, type ArObjectType } from '../spatial/spatialEngine'
+import { SpatialEngine } from '../spatial/spatialEngine'
+import type { ArBlueprint } from '@shared/types'
 
 // Free-form panel geometry, not a fixed size-cycle — per direct request to "grow the camera as
 // much as I want and move it and put it where I want". The canvas's internal draw resolution stays
@@ -100,8 +101,8 @@ export function HandTrackingController(): React.JSX.Element {
   useEffect(() => {
     const unsubStart = window.dalve.handTracking.onStart(() => void startTracking())
     const unsubStop = window.dalve.handTracking.onStop(() => stopTracking())
-    const unsubArSpawn = window.dalve.ar.onSpawn((type) => {
-      spatialEngineRef.current?.spawn(type as ArObjectType)
+    const unsubArSpawn = window.dalve.ar.onSpawn((blueprint) => {
+      spatialEngineRef.current?.spawn(blueprint as ArBlueprint)
     })
     const unsubArClear = window.dalve.ar.onClear(() => {
       spatialEngineRef.current?.clear()
@@ -206,6 +207,12 @@ export function HandTrackingController(): React.JSX.Element {
       if (!video) throw new Error('No video element to attach the camera to.')
       video.srcObject = stream
       await video.play()
+      // A camera can die mid-session — permission revoked, device unplugged, OS reclaims it —
+      // with nothing else here noticing. Without this, main process's "active" flag stays true
+      // forever after that, so a later "is hand tracking on" claim has no way to be honest.
+      stream.getVideoTracks().forEach((track) => {
+        track.onended = () => stopTracking()
+      })
 
       const landmarker = await ensureLandmarker()
       runningRef.current = true

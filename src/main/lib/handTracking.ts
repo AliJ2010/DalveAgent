@@ -64,8 +64,15 @@ const HOLD_TO_DRAG_MS = 2000
 // closing the hand to zoom out also incidentally brought thumb and middle close enough to fire a
 // spurious right-click. Direction matches the standard touchscreen pinch-zoom convention:
 // spreading the three fingers apart = zoom in, bringing them together = zoom out.
-const ZOOM_WINDOW_MS = 400
-const ZOOM_DELTA_THRESHOLD = 0.035
+// Loosened per direct feedback that zoom "hardly recognizes it" and zoom-out specifically kept
+// misfiring as zoom-in: a longer window tolerates a slower, more natural gesture, a lower
+// threshold tolerates a gentler motion, and — the main fix — requiring only 2 of the 3 pairwise
+// distances to agree (not all 3) tolerates the fingers closing/spreading at slightly different
+// rates, which real hand geometry does constantly. A 2-finger click still can't fake this: it only
+// ever moves the ONE pair involving the clicked finger, leaving both other pairs (which share the
+// uninvolved third finger) flat, so it can never satisfy a 2-of-3 majority.
+const ZOOM_WINDOW_MS = 550
+const ZOOM_DELTA_THRESHOLD = 0.028
 const ZOOM_COOLDOWN_MS = 550
 // Ctrl+scroll zoom step size is ultimately up to whatever app is focused (there's no OS-wide way
 // to force an exact "15% per step" — Chrome-based zoom, OS icon scaling, and PDF viewers all
@@ -125,6 +132,22 @@ export function stop(): { status: 'SUCCESS'; message: string } {
   rightPinching = false
   win?.webContents.send('handTracking:stop')
   return { status: 'SUCCESS', message: 'Hand tracking stopped, camera released.' }
+}
+
+/** The renderer's OWN camera loop can stop without this module ever telling it to — the camera
+ *  permission gets revoked mid-session, the tab loses the device, getUserMedia fails on a retry,
+ *  etc. Before this existed, none of those paths told main anything, so `active` stayed true
+ *  forever after a silent camera death: a real reported bug where the user said tracking had
+ *  stopped and DALVE claimed to have restarted it without actually calling start_hand_tracking,
+ *  because nothing had ever told this module it was no longer really active. Unlike stop(), this
+ *  doesn't re-notify the renderer — it already knows, since it's the one reporting in. */
+export function reportStopped(): void {
+  if (leftPinching) screenControl.releaseMouseUp('left')
+  active = false
+  leftPinching = false
+  leftPinchStartAt = null
+  leftDragging = false
+  rightPinching = false
 }
 
 function updateCursor(rawX: number, rawY: number, closenessSmoothingFactor: number): void {
@@ -203,15 +226,19 @@ function checkZoom(thumbIndexDist: number, thumbMiddleDist: number, indexMiddleD
   if (zoomHistory.length < 3 || now - lastZoomAt < ZOOM_COOLDOWN_MS) return
 
   const oldest = zoomHistory[0]
-  const dTI = thumbIndexDist - oldest.ti
-  const dTM = thumbMiddleDist - oldest.tm
-  const dIM = indexMiddleDist - oldest.im
+  const deltas = [
+    thumbIndexDist - oldest.ti,
+    thumbMiddleDist - oldest.tm,
+    indexMiddleDist - oldest.im
+  ]
+  const spreading = deltas.filter((d) => d > ZOOM_DELTA_THRESHOLD).length
+  const closing = deltas.filter((d) => d < -ZOOM_DELTA_THRESHOLD).length
 
-  if (dTI > ZOOM_DELTA_THRESHOLD && dTM > ZOOM_DELTA_THRESHOLD && dIM > ZOOM_DELTA_THRESHOLD) {
+  if (spreading >= 2) {
     lastZoomAt = now
     zoomHistory = []
     screenControl.zoomAtCurrentPosition(ZOOM_SCROLL_NOTCHES)
-  } else if (dTI < -ZOOM_DELTA_THRESHOLD && dTM < -ZOOM_DELTA_THRESHOLD && dIM < -ZOOM_DELTA_THRESHOLD) {
+  } else if (closing >= 2) {
     lastZoomAt = now
     zoomHistory = []
     screenControl.zoomAtCurrentPosition(-ZOOM_SCROLL_NOTCHES)

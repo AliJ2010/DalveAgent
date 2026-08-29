@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ListChecks, ChevronDown, ChevronUp, CheckCircle2, XCircle, X } from 'lucide-react'
 import { useActionTimelineStore } from '../state/actionTimelineStore'
+import { formatActionLabel } from '../lib/formatLabel'
 
 const POSITION_KEY = 'dalve-action-timeline-position'
 const PANEL_WIDTH = 320
@@ -165,7 +166,9 @@ export function ActionTimeline(): React.JSX.Element | null {
                 <div style={{ width: 13, height: 13, marginTop: 2, flexShrink: 0 }} />
               )}
               <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 12, color: 'var(--c-text-1)', wordBreak: 'break-word' }}>{entry.label}</div>
+                <div style={{ fontSize: 12, color: 'var(--c-text-1)', wordBreak: 'break-word' }}>
+                  {formatActionLabel(entry.label)}
+                </div>
                 {entry.detail && (
                   <div style={{ fontSize: 11, color: 'var(--c-text-3)', wordBreak: 'break-word', marginTop: 1 }}>
                     {entry.detail}

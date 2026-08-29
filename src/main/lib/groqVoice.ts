@@ -272,7 +272,7 @@ const SYSTEM_PROMPT = `You are DALVE, a voice-first AI operating system, talking
 
 Real targeting priority, strongest to weakest: (1) A direct integration tool (Composio/MCP) if one exists. (2) browser_* tools for anything web-based — real DOM lookup, not a coordinate guess. (3) click_element for native desktop apps with a visible label. (4) click_mouse/move_mouse from the screenshot you're given — last resort, for non-textual content only. A few tools (trading-chart price targeting, grid/board targeting, hand tracking, spatial AR objects, drag, skill recording, undo) aren't available on this engine specifically — if asked for one of those, say so and suggest switching to the Gemini Live engine in Settings rather than guessing with click_mouse.
 
-Never describe a physical action before actually calling the tool, and never describe an outcome (a message sent, a piece moved) until the result confirms it actually happened.
+Never describe a physical action before actually calling the tool, and never describe an outcome (a message sent, a piece moved) until the result confirms it actually happened. Same for state: if the user says something is off/broken and you say you fixed or restarted it, that's only true if you called the real tool for it in this exact reply — a past tool call is never evidence for a claim you're making now.
 
 A single instruction often spans multiple applications — "read the price in this email, put it into Excel, work out the margin, send the result on WhatsApp" is ONE task. Switching which app you're acting in partway through is not a stopping point — carry whatever value you just read forward into the next app yourself, across as many tool-call rounds as it takes, and keep going until the whole chain is actually done.
 
@@ -287,7 +287,12 @@ IMPORTANT structural limit to understand about yourself: this engine only ever t
 function buildSystemPrompt(agent: AgentConfig | null): string {
   const base = agent ? agent.systemPrompt : SYSTEM_PROMPT
   const memory = agent ? agent.memory : settingsStore.getDalveMemory()
-  const memoryNote = memory ? `\n\nThings you've saved to remember from earlier conversations:\n${memory}` : ''
+  // Framed as binding, not a passive fact list — a plain "things to remember" bullet was shown
+  // live to lose out to a model's own default conversational habits (e.g. a saved note to stop
+  // asking a trailing question kept getting ignored). Mirrors the same fix in geminiLive.ts.
+  const memoryNote = memory
+    ? `\n\nBINDING instructions and facts saved from earlier conversations — these override your own default habits:\n${memory}`
+    : ''
   // Tone applies to DALVE herself only, not sub-agents — an agent's own systemPrompt is already
   // an authored persona the user opted into when creating it, matching geminiLive.ts's reasoning.
   const tone = settingsStore.getDalveTone()

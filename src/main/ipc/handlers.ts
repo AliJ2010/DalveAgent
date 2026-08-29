@@ -355,6 +355,7 @@ export function registerIpcHandlers(): void {
   ipcMain.on('handTracking:frame', (_e, frame: HandFrame) => {
     handTracking.onFrame(frame)
   })
+  ipcMain.on('handTracking:rendererStopped', () => handTracking.reportStopped())
 
   // --- Spatial AR objects ---
   ipcMain.handle('ar:clear', () => arObjects.clear())

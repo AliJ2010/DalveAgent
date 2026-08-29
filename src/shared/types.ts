@@ -229,3 +229,38 @@ export const PRIORITY_COMPOSIO_APPS: { key: string; name: string }[] = [
 ]
 
 export const GEMINI_VOICES = ['Zephyr', 'Puck', 'Charon', 'Kore', 'Fenrir', 'Aoede'] as const
+
+// A generic, primitive-based description of a real-world object for the spatial AR system
+// (src/renderer/src/spatial/spatialEngine.ts) — one generic renderer/interaction path handles
+// ANY blueprint, whether it's a hand-authored built-in (a microwave, a lamp) or one an AI just
+// generated from looking at a screenshot, rather than a bespoke hardcoded mesh per object type.
+export type ArShape = 'box' | 'cylinder' | 'sphere'
+// 'body' is the main graspable part (move/rotate/resize target). 'door' hinges open via its
+// 'handle' child. 'button' presses inward on pinch. 'static' is purely decorative (no interaction).
+export type ArPartRole = 'body' | 'handle' | 'button' | 'door' | 'static'
+
+export interface ArBlueprintPart {
+  id: string
+  shape: ArShape
+  /** box: [width, height, depth]. cylinder: [radiusTop, radiusBottom, height]. sphere: [radius, radius, radius]. */
+  size: [number, number, number]
+  /** Local position relative to the parent (or the object's own origin, if no parent). For a
+   *  'door' part this is where its hinge axis sits, not its visual center — see hingeOffset. */
+  position: [number, number, number]
+  rotation?: [number, number, number]
+  /** CSS hex color, e.g. "#d4af37". */
+  color: string
+  role?: ArPartRole
+  /** id of another part in the same blueprint this attaches to. Omit/null to attach to the root. */
+  parentId?: string | null
+  /** Only meaningful on a 'door' part: the visual mesh's offset from the hinge axis in `position`,
+   *  so it swings around that axis instead of spinning in place around its own center. */
+  hingeOffset?: [number, number, number]
+  metalness?: number
+  roughness?: number
+}
+
+export interface ArBlueprint {
+  name: string
+  parts: ArBlueprintPart[]
+}
