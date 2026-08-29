@@ -7,6 +7,7 @@ import { IntegrationsScreen } from './components/IntegrationsScreen'
 import { SettingsScreen } from './components/SettingsScreen'
 import { KnowledgeScreen } from './components/KnowledgeScreen'
 import { CalendarScreen } from './components/CalendarScreen'
+import { LogsScreen } from './components/LogsScreen'
 import { AgentsCanvas } from './components/AgentsCanvas'
 import { ScreenControlOverlay } from './components/ScreenControlOverlay'
 import { HandTrackingController } from './components/HandTrackingController'
@@ -24,6 +25,7 @@ import {
   initScreenControlBridge,
   initAutonomousTaskBridge,
   initWakeTriggerBridge,
+  initWakeWordBridge,
   toggleVoiceSession
 } from './lib/voiceSession'
 
@@ -43,6 +45,7 @@ function App(): React.JSX.Element {
     initScreenControlBridge()
     initAutonomousTaskBridge()
     initWakeTriggerBridge()
+    initWakeWordBridge()
     void useSettingsStore.getState().refresh()
     void useAgentsStore.getState().refresh()
     void useScheduleStore.getState().refresh()
@@ -104,6 +107,7 @@ function App(): React.JSX.Element {
           {screen === 'agents' && <AgentsCanvas />}
           {screen === 'knowledge' && <KnowledgeScreen />}
           {screen === 'calendar' && <CalendarScreen />}
+          {screen === 'logs' && <LogsScreen />}
           {screen === 'settings' && <SettingsScreen />}
 
           {screen === 'home' && (

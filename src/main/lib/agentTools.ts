@@ -5,6 +5,7 @@ import * as ocr from './ocr'
 import * as gridTargeting from './gridTargeting'
 import * as browserControl from './browserControl'
 import { createReminderTool, listRemindersTool, cancelReminderTool } from './scheduleStore'
+import * as fileTools from './fileTools'
 
 /**
  * The screen/browser/desktop tool set shared by every Claude-driven agent loop in DALVE
@@ -130,6 +131,63 @@ const CANCEL_REMINDER_TOOL: Tool = {
   input_schema: { type: 'object', properties: { title: { type: 'string' } }, required: ['title'] }
 }
 
+// --- File system + clipboard — real local file access, at the same standing-trust level as the
+// screen/mouse control above (delete goes to the Recycle Bin, never a permanent unlink). ---
+const LIST_COMMON_FOLDERS_TOOL: Tool = {
+  name: 'list_common_folders',
+  description: "Returns the user's real Home/Desktop/Documents/Downloads/Pictures folder paths — use this to build real file paths instead of guessing them.",
+  input_schema: { type: 'object', properties: {} }
+}
+const LIST_DIRECTORY_TOOL: Tool = {
+  name: 'list_directory',
+  description: 'Lists files and subfolders in a real directory path.',
+  input_schema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] }
+}
+const READ_TEXT_FILE_TOOL: Tool = {
+  name: 'read_text_file',
+  description: 'Reads a plain text/code/markdown/csv/json file. For PDFs or images use read_document instead.',
+  input_schema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] }
+}
+const WRITE_TEXT_FILE_TOOL: Tool = {
+  name: 'write_text_file',
+  description: 'Writes (or appends to) a plain text file, creating it if it does not exist.',
+  input_schema: {
+    type: 'object',
+    properties: { path: { type: 'string' }, content: { type: 'string' }, append: { type: 'boolean' } },
+    required: ['path', 'content']
+  }
+}
+const DELETE_FILE_TOOL: Tool = {
+  name: 'delete_file',
+  description: 'Moves a file to the Recycle Bin (recoverable, not a permanent delete).',
+  input_schema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] }
+}
+const MOVE_FILE_TOOL: Tool = {
+  name: 'move_file',
+  description: 'Moves or renames a file from one path to another.',
+  input_schema: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' } }, required: ['from', 'to'] }
+}
+const SEARCH_FILES_TOOL: Tool = {
+  name: 'search_files',
+  description: 'Searches for files by (partial, case-insensitive) filename under a directory, recursively.',
+  input_schema: { type: 'object', properties: { directory: { type: 'string' }, query: { type: 'string' } }, required: ['directory', 'query'] }
+}
+const READ_DOCUMENT_TOOL: Tool = {
+  name: 'read_document',
+  description: 'Reads a document by real file path — text/code/markdown/csv/json directly, PDFs via real text extraction, images as vision content on your next reply. .docx and other office formats are not supported yet.',
+  input_schema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] }
+}
+const READ_CLIPBOARD_TOOL: Tool = {
+  name: 'read_clipboard',
+  description: "Reads the current text on the user's OS clipboard.",
+  input_schema: { type: 'object', properties: {} }
+}
+const WRITE_CLIPBOARD_TOOL: Tool = {
+  name: 'write_clipboard',
+  description: "Sets the user's OS clipboard to the given text.",
+  input_schema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] }
+}
+
 /** The physical/browser action tools every agent loop shares. Control-flow tools (when to stop,
  *  how to report completion) differ per caller and are added on top of this by each one. */
 export const SHARED_TOOLS: Tool[] = [
@@ -148,7 +206,17 @@ export const SHARED_TOOLS: Tool[] = [
   UNDO_LAST_TYPED_TEXT_TOOL,
   CREATE_REMINDER_TOOL,
   LIST_REMINDERS_TOOL,
-  CANCEL_REMINDER_TOOL
+  CANCEL_REMINDER_TOOL,
+  LIST_COMMON_FOLDERS_TOOL,
+  LIST_DIRECTORY_TOOL,
+  READ_TEXT_FILE_TOOL,
+  WRITE_TEXT_FILE_TOOL,
+  DELETE_FILE_TOOL,
+  MOVE_FILE_TOOL,
+  SEARCH_FILES_TOOL,
+  READ_DOCUMENT_TOOL,
+  READ_CLIPBOARD_TOOL,
+  WRITE_CLIPBOARD_TOOL
 ]
 
 /** Actions that are supposed to visibly change the page — worth a real before/after check rather
@@ -225,6 +293,32 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       return { result: listRemindersTool() }
     case 'cancel_reminder':
       return cancelReminderTool(String(args.title ?? ''))
+    case 'list_common_folders':
+      return { result: JSON.stringify(fileTools.listCommonFolders()) }
+    case 'list_directory':
+      return await fileTools.listDirectory(String(args.path ?? ''))
+    case 'read_text_file':
+      return await fileTools.readTextFile(String(args.path ?? ''))
+    case 'write_text_file':
+      return await fileTools.writeTextFile(String(args.path ?? ''), String(args.content ?? ''), Boolean(args.append))
+    case 'delete_file':
+      return await fileTools.deleteFile(String(args.path ?? ''))
+    case 'move_file':
+      return await fileTools.moveFile(String(args.from ?? ''), String(args.to ?? ''))
+    case 'search_files':
+      return await fileTools.searchFiles(String(args.directory ?? ''), String(args.query ?? ''))
+    case 'read_document': {
+      const doc = await fileTools.readDocument(String(args.path ?? ''))
+      if (doc.imageBase64) {
+        return { status: 'FAILED', error: 'This is an image file — reading arbitrary local images is only supported in a live voice session, not here.' }
+      }
+      return { status: doc.status, result: doc.text, error: doc.error }
+    }
+    case 'read_clipboard':
+      return { result: fileTools.readClipboardText() }
+    case 'write_clipboard':
+      fileTools.writeClipboardText(String(args.text ?? ''))
+      return { result: 'Clipboard set.' }
     default:
       return { error: `Unrecognized action "${name}".` }
   }

@@ -1,7 +1,7 @@
 import { app, safeStorage, type BrowserWindow } from 'electron'
 import { join } from 'path'
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
-import type { ComposioConnection, McpServerConfig, SettingsState } from '@shared/types'
+import type { BuiltinWakeWord, ComposioConnection, DalveTone, McpServerConfig, SettingsState } from '@shared/types'
 import { PRIORITY_COMPOSIO_APPS } from '@shared/types'
 
 let win: BrowserWindow | null = null
@@ -42,6 +42,11 @@ interface StoredSecrets {
   /** Which engine powers the live voice session — kept alongside Gemini (not a replacement) so a
    *  problem with the new cascade never leaves the user with no working voice option at all. */
   voiceEngine: 'gemini' | 'groq'
+  dalveTone: DalveTone
+  picovoiceAccessKey?: string // base64-encoded, safeStorage-encrypted
+  wakeWordEnabled: boolean
+  wakeWordKeyword: BuiltinWakeWord | 'custom'
+  wakeWordCustomPath?: string
 }
 
 function defaultStore(): StoredSecrets {
@@ -59,7 +64,10 @@ function defaultStore(): StoredSecrets {
     // Seeded per explicit request — a shared-library ElevenLabs voice the user picked that
     // doesn't show up via /v2/voices for their account.
     elevenLabsCustomVoices: [{ voiceId: 'wDsJlOXPqcvIUKdLXjDs', name: 'Jarvis' }],
-    voiceEngine: 'gemini'
+    voiceEngine: 'gemini',
+    dalveTone: 'default',
+    wakeWordEnabled: false,
+    wakeWordKeyword: 'jarvis'
   }
 }
 
@@ -170,7 +178,12 @@ class SettingsStore {
       elevenLabsVoiceId: this.data.elevenLabsVoiceId,
       elevenLabsVoiceName: this.data.elevenLabsVoiceName,
       elevenLabsCustomVoices: this.data.elevenLabsCustomVoices,
-      voiceEngine: this.data.voiceEngine
+      voiceEngine: this.data.voiceEngine,
+      dalveTone: this.data.dalveTone,
+      picovoiceAccessKeySet: !!this.data.picovoiceAccessKey,
+      wakeWordEnabled: this.data.wakeWordEnabled,
+      wakeWordKeyword: this.data.wakeWordKeyword,
+      wakeWordCustomPath: this.data.wakeWordCustomPath
     }
   }
 
@@ -304,6 +317,47 @@ class SettingsStore {
 
   getVoiceEngine(): 'gemini' | 'groq' {
     return this.data.voiceEngine
+  }
+
+  setDalveTone(tone: DalveTone): void {
+    this.data.dalveTone = tone
+    this.persist()
+    this.notifyChange()
+  }
+
+  getDalveTone(): DalveTone {
+    return this.data.dalveTone
+  }
+
+  setPicovoiceAccessKey(key: string): void {
+    this.data.picovoiceAccessKey = key ? encrypt(key) : undefined
+    this.persist()
+    this.notifyChange()
+  }
+
+  getPicovoiceAccessKey(): string | undefined {
+    return this.data.picovoiceAccessKey ? decrypt(this.data.picovoiceAccessKey) : undefined
+  }
+
+  setWakeWordEnabled(enabled: boolean): void {
+    this.data.wakeWordEnabled = enabled
+    this.persist()
+    this.notifyChange()
+  }
+
+  getWakeWordEnabled(): boolean {
+    return this.data.wakeWordEnabled
+  }
+
+  setWakeWordKeyword(keyword: BuiltinWakeWord | 'custom', customPath?: string): void {
+    this.data.wakeWordKeyword = keyword
+    this.data.wakeWordCustomPath = keyword === 'custom' ? customPath : undefined
+    this.persist()
+    this.notifyChange()
+  }
+
+  getWakeWordConfig(): { keyword: BuiltinWakeWord | 'custom'; customPath?: string } {
+    return { keyword: this.data.wakeWordKeyword, customPath: this.data.wakeWordCustomPath }
   }
 
   /** Main-process-only accessor. Never exposed to the renderer over IPC. */

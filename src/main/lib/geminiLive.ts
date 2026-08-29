@@ -20,12 +20,14 @@ import * as handTracking from './handTracking'
 import * as mcpClient from './mcpClient'
 import { skillsStore as skillsDb, isRecording, startRecording, stopRecording, recordStep, SKILL_META_TOOLS } from './skillsStore'
 import { createReminderTool, listRemindersTool, cancelReminderTool } from './scheduleStore'
+import * as fileTools from './fileTools'
 import * as uiAutomation from './uiAutomation'
 import * as ocr from './ocr'
 import * as gridTargeting from './gridTargeting'
 import * as browserControl from './browserControl'
 import * as journal from './journal'
 import type { AgentConfig, VoiceEvent } from '@shared/types'
+import { DALVE_TONE_PROMPTS } from '@shared/types'
 
 // The newest native-audio-dialog Live model as of build time. Re-check
 // https://ai.google.dev/gemini-api/docs/live-api before shipping — Google
@@ -325,6 +327,61 @@ const CANCEL_REMINDER_TOOL: FunctionDeclaration = {
   name: 'cancel_reminder',
   description: 'Cancels a reminder or scheduled message by its exact title.',
   parametersJsonSchema: { type: 'object', properties: { title: { type: 'string' } }, required: ['title'] }
+}
+
+const LIST_COMMON_FOLDERS_TOOL: FunctionDeclaration = {
+  name: 'list_common_folders',
+  description: "Returns the user's real Home/Desktop/Documents/Downloads/Pictures folder paths — use this to build real file paths instead of guessing them.",
+  parametersJsonSchema: { type: 'object', properties: {} }
+}
+const LIST_DIRECTORY_TOOL: FunctionDeclaration = {
+  name: 'list_directory',
+  description: 'Lists files and subfolders in a real directory path.',
+  parametersJsonSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] }
+}
+const READ_TEXT_FILE_TOOL: FunctionDeclaration = {
+  name: 'read_text_file',
+  description: 'Reads a plain text/code/markdown/csv/json file. For PDFs or images use read_document instead.',
+  parametersJsonSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] }
+}
+const WRITE_TEXT_FILE_TOOL: FunctionDeclaration = {
+  name: 'write_text_file',
+  description: 'Writes (or appends to) a plain text file, creating it if it does not exist.',
+  parametersJsonSchema: {
+    type: 'object',
+    properties: { path: { type: 'string' }, content: { type: 'string' }, append: { type: 'boolean' } },
+    required: ['path', 'content']
+  }
+}
+const DELETE_FILE_TOOL: FunctionDeclaration = {
+  name: 'delete_file',
+  description: 'Moves a file to the Recycle Bin (recoverable, not a permanent delete).',
+  parametersJsonSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] }
+}
+const MOVE_FILE_TOOL: FunctionDeclaration = {
+  name: 'move_file',
+  description: 'Moves or renames a file from one path to another.',
+  parametersJsonSchema: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' } }, required: ['from', 'to'] }
+}
+const SEARCH_FILES_TOOL: FunctionDeclaration = {
+  name: 'search_files',
+  description: 'Searches for files by (partial, case-insensitive) filename under a directory, recursively.',
+  parametersJsonSchema: { type: 'object', properties: { directory: { type: 'string' }, query: { type: 'string' } }, required: ['directory', 'query'] }
+}
+const READ_DOCUMENT_TOOL: FunctionDeclaration = {
+  name: 'read_document',
+  description: 'Reads a document by real file path — text/code/markdown/csv/json directly, PDFs via real text extraction, images attached as vision content for you to actually see. .docx and other office formats are not supported yet.',
+  parametersJsonSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] }
+}
+const READ_CLIPBOARD_TOOL: FunctionDeclaration = {
+  name: 'read_clipboard',
+  description: "Reads the current text on the user's OS clipboard.",
+  parametersJsonSchema: { type: 'object', properties: {} }
+}
+const WRITE_CLIPBOARD_TOOL: FunctionDeclaration = {
+  name: 'write_clipboard',
+  description: "Sets the user's OS clipboard to the given text.",
+  parametersJsonSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] }
 }
 
 const BROWSER_OPEN_TOOL: FunctionDeclaration = {
@@ -638,6 +695,16 @@ async function buildToolsForAgent(agent: AgentConfig | null): Promise<Tool[]> {
     CREATE_REMINDER_TOOL,
     LIST_REMINDERS_TOOL,
     CANCEL_REMINDER_TOOL,
+    LIST_COMMON_FOLDERS_TOOL,
+    LIST_DIRECTORY_TOOL,
+    READ_TEXT_FILE_TOOL,
+    WRITE_TEXT_FILE_TOOL,
+    DELETE_FILE_TOOL,
+    MOVE_FILE_TOOL,
+    SEARCH_FILES_TOOL,
+    READ_DOCUMENT_TOOL,
+    READ_CLIPBOARD_TOOL,
+    WRITE_CLIPBOARD_TOOL,
     LIST_AGENTS_TOOL,
     SWITCH_AGENT_TOOL,
     REMEMBER_FACT_TOOL,
@@ -761,11 +828,17 @@ export async function startVoiceSession(
   // system-prompt-level date note; needed for create_reminder to resolve relative times
   // ("tomorrow", "in an hour") into a real datetime.
   const dateTimeNote = `\n\nCurrent date/time: ${new Date().toString()}`
+  // Tone applies to DALVE herself only, not sub-agents — an agent's own systemPrompt is already
+  // an authored persona the user opted into when creating it, and a global tone override would
+  // fight that instead of complementing it (same reasoning as dalveMemory being DALVE-only).
+  const tone = settingsStore.getDalveTone()
+  const toneNote = !agent && tone !== 'default' ? `\n\n${DALVE_TONE_PROMPTS[tone]}` : ''
   const systemPrompt =
     (agent ? agent.systemPrompt : DALVE_SYSTEM_PROMPT) +
     `\n\n${CHAIN_OF_COMMAND}` +
     registryNote +
     dateTimeNote +
+    toneNote +
     memoryNote +
     journalNote
   const voiceName = agent ? agent.voice : settingsStore.getDalveVoice()
@@ -1028,6 +1101,35 @@ async function handleToolCalls(functionCalls: FunctionCall[]): Promise<void> {
         response = { result: listRemindersTool() }
       } else if (fc.name === 'cancel_reminder') {
         response = cancelReminderTool(String(args.title ?? ''))
+      } else if (fc.name === 'list_common_folders') {
+        response = { result: JSON.stringify(fileTools.listCommonFolders()) }
+      } else if (fc.name === 'list_directory') {
+        response = await fileTools.listDirectory(String(args.path ?? ''))
+      } else if (fc.name === 'read_text_file') {
+        response = await fileTools.readTextFile(String(args.path ?? ''))
+      } else if (fc.name === 'write_text_file') {
+        response = await fileTools.writeTextFile(String(args.path ?? ''), String(args.content ?? ''), Boolean(args.append))
+      } else if (fc.name === 'delete_file') {
+        response = await fileTools.deleteFile(String(args.path ?? ''))
+      } else if (fc.name === 'move_file') {
+        response = await fileTools.moveFile(String(args.from ?? ''), String(args.to ?? ''))
+      } else if (fc.name === 'search_files') {
+        response = await fileTools.searchFiles(String(args.directory ?? ''), String(args.query ?? ''))
+      } else if (fc.name === 'read_document') {
+        const doc = await fileTools.readDocument(String(args.path ?? ''))
+        if (doc.imageBase64) {
+          // Fed in as a real "video frame" — the same mechanism start_screen_share already uses —
+          // so the live session actually sees it, not just a text description of it.
+          sendVideoFrame(doc.imageBase64)
+          response = { status: 'SUCCESS', result: 'Image sent — look at it directly.' }
+        } else {
+          response = { status: doc.status, result: doc.text, error: doc.error }
+        }
+      } else if (fc.name === 'read_clipboard') {
+        response = { result: fileTools.readClipboardText() }
+      } else if (fc.name === 'write_clipboard') {
+        fileTools.writeClipboardText(String(args.text ?? ''))
+        response = { result: 'Clipboard set.' }
       } else if (fc.name === 'create_agent') {
         const type = args.type === 'bot' ? 'bot' : 'companion'
         const agent = agentStore.create({

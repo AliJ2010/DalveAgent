@@ -3,7 +3,8 @@ import { Trash2 } from 'lucide-react'
 import { useSettingsStore } from '../state/settingsStore'
 import { useUiStore } from '../state/uiStore'
 import { useAuthStore } from '../state/authStore'
-import { GEMINI_VOICES } from '@shared/types'
+import { GEMINI_VOICES, DALVE_TONE_LABELS, BUILTIN_WAKE_WORDS } from '@shared/types'
+import type { DalveTone } from '@shared/types'
 
 export function SettingsScreen(): React.JSX.Element {
   const settings = useSettingsStore((s) => s.settings)
@@ -20,6 +21,11 @@ export function SettingsScreen(): React.JSX.Element {
   const loadElevenLabsVoices = useSettingsStore((s) => s.loadElevenLabsVoices)
   const setComposioKey = useSettingsStore((s) => s.setComposioKey)
   const setDalveVoice = useSettingsStore((s) => s.setDalveVoice)
+  const setDalveTone = useSettingsStore((s) => s.setDalveTone)
+  const setPicovoiceAccessKey = useSettingsStore((s) => s.setPicovoiceAccessKey)
+  const setWakeWordEnabled = useSettingsStore((s) => s.setWakeWordEnabled)
+  const setWakeWordKeyword = useSettingsStore((s) => s.setWakeWordKeyword)
+  const pickWakeWordFile = useSettingsStore((s) => s.pickWakeWordFile)
   const addMcpServer = useSettingsStore((s) => s.addMcpServer)
   const removeMcpServer = useSettingsStore((s) => s.removeMcpServer)
   const setScreen = useUiStore((s) => s.setScreen)
@@ -32,6 +38,7 @@ export function SettingsScreen(): React.JSX.Element {
   const [telegramInput, setTelegramInput] = useState('')
   const [groqInput, setGroqInput] = useState('')
   const [elevenLabsInput, setElevenLabsInput] = useState('')
+  const [picovoiceInput, setPicovoiceInput] = useState('')
   const [composioInput, setComposioInput] = useState('')
   const [composioError, setComposioError] = useState<string | null>(null)
   const [savedNotice, setSavedNotice] = useState<string | null>(null)
@@ -82,6 +89,18 @@ export function SettingsScreen(): React.JSX.Element {
     await setGroqKey(groqInput.trim())
     setGroqInput('')
     flash('Groq API key saved')
+  }
+
+  async function savePicovoice(): Promise<void> {
+    if (!picovoiceInput.trim()) return
+    await setPicovoiceAccessKey(picovoiceInput.trim())
+    setPicovoiceInput('')
+    flash('Picovoice AccessKey saved')
+  }
+
+  async function pickCustomWakeWordFile(): Promise<void> {
+    const path = await pickWakeWordFile()
+    if (path) await setWakeWordKeyword('custom', path)
   }
 
   async function saveElevenLabs(): Promise<void> {
@@ -368,6 +387,111 @@ export function SettingsScreen(): React.JSX.Element {
           <p style={{ fontSize: 12, color: 'var(--c-text-3)', marginTop: 8 }}>
             Takes effect on your next voice session.
           </p>
+        </Section>
+
+        <Section title="DALVE's personality">
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {(Object.keys(DALVE_TONE_LABELS) as DalveTone[]).map((t) => (
+              <button
+                key={t}
+                onClick={() => void setDalveTone(t)}
+                style={{
+                  flex: '1 1 auto',
+                  padding: '8px 14px',
+                  borderRadius: 8,
+                  fontSize: 12,
+                  border: settings?.dalveTone === t ? '1px solid var(--c-gold)' : '1px solid var(--c-panel-border)',
+                  color: settings?.dalveTone === t ? 'var(--c-gold-bright)' : 'var(--c-text-2)',
+                  background: settings?.dalveTone === t ? 'rgba(212,175,55,0.08)' : 'transparent'
+                }}
+              >
+                {DALVE_TONE_LABELS[t]}
+              </button>
+            ))}
+          </div>
+          <p style={{ fontSize: 12, color: 'var(--c-text-3)', marginTop: 8 }}>
+            How DALVE herself talks to you — doesn't change any agent's own personality, since
+            those already have their own system prompt.
+          </p>
+        </Section>
+
+        <Section title="Wake word (beta)">
+          <p style={{ fontSize: 12, color: 'var(--c-text-3)', marginBottom: 12 }}>
+            Say a wake word to start listening hands-free, instead of the Ctrl+Alt+D hotkey. Needs
+            a free AccessKey from{' '}
+            <button
+              onClick={() => window.dalve.shell.openExternal('https://console.picovoice.ai/')}
+              style={{ color: 'var(--c-gold-bright)', textDecoration: 'underline' }}
+            >
+              console.picovoice.ai
+            </button>
+            . The built-in words below work immediately; "Hey DALVE" specifically needs one extra
+            free step — train a custom keyword at the same site (a couple minutes), download the
+            .ppn file it gives you, and point to it below as "Custom".
+          </p>
+          <KeyRow
+            placeholder={settings?.picovoiceAccessKeySet ? 'Key saved — enter a new key to replace it' : 'Paste your Picovoice AccessKey'}
+            value={picovoiceInput}
+            onChange={setPicovoiceInput}
+            onSubmit={savePicovoice}
+            saved={settings?.picovoiceAccessKeySet}
+          />
+
+          {settings?.picovoiceAccessKeySet && (
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--c-text-1)' }}>
+                  <input
+                    type="checkbox"
+                    checked={settings.wakeWordEnabled}
+                    onChange={(e) => void setWakeWordEnabled(e.target.checked)}
+                  />
+                  Enable wake-word listening
+                </label>
+              </div>
+
+              <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+                {BUILTIN_WAKE_WORDS.map((w) => (
+                  <button
+                    key={w}
+                    onClick={() => void setWakeWordKeyword(w)}
+                    style={{
+                      padding: '7px 14px',
+                      borderRadius: 8,
+                      fontSize: 12,
+                      textTransform: 'capitalize',
+                      border: settings.wakeWordKeyword === w ? '1px solid var(--c-gold)' : '1px solid var(--c-panel-border)',
+                      color: settings.wakeWordKeyword === w ? 'var(--c-gold-bright)' : 'var(--c-text-2)',
+                      background: settings.wakeWordKeyword === w ? 'rgba(212,175,55,0.08)' : 'transparent'
+                    }}
+                  >
+                    "{w}"
+                  </button>
+                ))}
+                <button
+                  onClick={pickCustomWakeWordFile}
+                  style={{
+                    padding: '7px 14px',
+                    borderRadius: 8,
+                    fontSize: 12,
+                    border: settings.wakeWordKeyword === 'custom' ? '1px solid var(--c-gold)' : '1px solid var(--c-panel-border)',
+                    color: settings.wakeWordKeyword === 'custom' ? 'var(--c-gold-bright)' : 'var(--c-text-2)',
+                    background: settings.wakeWordKeyword === 'custom' ? 'rgba(212,175,55,0.08)' : 'transparent'
+                  }}
+                >
+                  Custom (.ppn)…
+                </button>
+              </div>
+              {settings.wakeWordKeyword === 'custom' && settings.wakeWordCustomPath && (
+                <p style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 8, wordBreak: 'break-all' }}>
+                  {settings.wakeWordCustomPath}
+                </p>
+              )}
+              <p style={{ fontSize: 12, color: 'var(--c-text-3)', marginTop: 10 }}>
+                Only listens while you're not already in a conversation with DALVE.
+              </p>
+            </>
+          )}
         </Section>
 
         <Section title="DALVE's memory">

@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { ComposioCatalogEntry, SettingsState } from '@shared/types'
+import type { BuiltinWakeWord, ComposioCatalogEntry, DalveTone, SettingsState } from '@shared/types'
 
 interface SettingsStoreState {
   settings: SettingsState | null
@@ -14,6 +14,11 @@ interface SettingsStoreState {
   addElevenLabsCustomVoice: (voiceId: string, name: string) => Promise<void>
   removeElevenLabsCustomVoice: (voiceId: string) => Promise<void>
   setVoiceEngine: (engine: 'gemini' | 'groq') => Promise<void>
+  setDalveTone: (tone: DalveTone) => Promise<void>
+  setPicovoiceAccessKey: (key: string) => Promise<void>
+  setWakeWordEnabled: (enabled: boolean) => Promise<void>
+  setWakeWordKeyword: (keyword: BuiltinWakeWord | 'custom', customPath?: string) => Promise<void>
+  pickWakeWordFile: () => Promise<string | null>
   elevenLabsVoices: { voiceId: string; name: string; category?: string }[]
   elevenLabsVoicesError: string | null
   loadElevenLabsVoices: (force?: boolean) => Promise<void>
@@ -103,6 +108,28 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
     const settings = await window.dalve.settings.setVoiceEngine(engine)
     set({ settings })
   },
+
+  setDalveTone: async (tone) => {
+    const settings = await window.dalve.settings.setDalveTone(tone)
+    set({ settings })
+  },
+
+  setPicovoiceAccessKey: async (key) => {
+    const settings = await window.dalve.settings.setPicovoiceAccessKey(key)
+    set({ settings })
+  },
+
+  setWakeWordEnabled: async (enabled) => {
+    const settings = await window.dalve.settings.setWakeWordEnabled(enabled)
+    set({ settings })
+  },
+
+  setWakeWordKeyword: async (keyword, customPath) => {
+    const settings = await window.dalve.settings.setWakeWordKeyword(keyword, customPath)
+    set({ settings })
+  },
+
+  pickWakeWordFile: async () => window.dalve.settings.pickWakeWordFile(),
 
   loadElevenLabsVoices: async (force = false) => {
     if (!force && get().elevenLabsVoices.length > 0) return

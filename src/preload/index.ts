@@ -3,7 +3,9 @@ import { electronAPI } from '@electron-toolkit/preload'
 import type {
   AgentConfig,
   AutonomousTaskEvent,
+  BuiltinWakeWord,
   ComposioCatalogEntry,
+  DalveTone,
   HandFrame,
   ScheduleItem,
   ScheduleRecurrence,
@@ -33,6 +35,12 @@ const dalveApi = {
       ipcRenderer.invoke('settings:setElevenLabsVoice', voiceId, voiceName),
     setVoiceEngine: (engine: 'gemini' | 'groq'): Promise<SettingsState> =>
       ipcRenderer.invoke('settings:setVoiceEngine', engine),
+    setDalveTone: (tone: DalveTone): Promise<SettingsState> => ipcRenderer.invoke('settings:setDalveTone', tone),
+    setPicovoiceAccessKey: (key: string): Promise<SettingsState> => ipcRenderer.invoke('settings:setPicovoiceAccessKey', key),
+    setWakeWordEnabled: (enabled: boolean): Promise<SettingsState> => ipcRenderer.invoke('settings:setWakeWordEnabled', enabled),
+    setWakeWordKeyword: (keyword: BuiltinWakeWord | 'custom', customPath?: string): Promise<SettingsState> =>
+      ipcRenderer.invoke('settings:setWakeWordKeyword', keyword, customPath),
+    pickWakeWordFile: (): Promise<string | null> => ipcRenderer.invoke('settings:pickWakeWordFile'),
     listElevenLabsVoices: (): Promise<{ voiceId: string; name: string; category?: string }[]> =>
       ipcRenderer.invoke('settings:listElevenLabsVoices'),
     addElevenLabsCustomVoice: (voiceId: string, name: string): Promise<SettingsState> =>
@@ -103,6 +111,19 @@ const dalveApi = {
       ipcRenderer.on('agents:changed', listener)
       return () => ipcRenderer.removeListener('agents:changed', listener)
     }
+  },
+  panic: {
+    trigger: (): Promise<void> => ipcRenderer.invoke('panic:trigger')
+  },
+  wakeWord: {
+    start: (): Promise<{ status: 'SUCCESS' | 'FAILED'; message: string; frameLength?: number }> =>
+      ipcRenderer.invoke('wakeWord:start'),
+    stop: (): Promise<void> => ipcRenderer.invoke('wakeWord:stop'),
+    sendAudioChunk: (base64Pcm16: string): void => ipcRenderer.send('wakeWord:audioChunk', base64Pcm16)
+  },
+  logs: {
+    read: (filter: 'all' | 'warnErr', maxLines: number): Promise<{ path: string; lines: string[]; error?: string }> =>
+      ipcRenderer.invoke('logs:read', filter, maxLines)
   },
   schedule: {
     list: (): Promise<ScheduleItem[]> => ipcRenderer.invoke('schedule:list'),

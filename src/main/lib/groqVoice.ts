@@ -23,7 +23,9 @@ import * as handTracking from './handTracking'
 import * as mcpClient from './mcpClient'
 import { skillsStore as skillsDb, isRecording, startRecording, stopRecording, recordStep, SKILL_META_TOOLS } from './skillsStore'
 import { createReminderTool, listRemindersTool, cancelReminderTool } from './scheduleStore'
+import * as fileTools from './fileTools'
 import type { AgentConfig, VoiceEvent } from '@shared/types'
+import { DALVE_TONE_PROMPTS } from '@shared/types'
 
 /**
  * A cascaded voice engine (Groq for STT + reasoning, ElevenLabs for speech) — an alternative to
@@ -286,7 +288,11 @@ function buildSystemPrompt(agent: AgentConfig | null): string {
   const base = agent ? agent.systemPrompt : SYSTEM_PROMPT
   const memory = agent ? agent.memory : settingsStore.getDalveMemory()
   const memoryNote = memory ? `\n\nThings you've saved to remember from earlier conversations:\n${memory}` : ''
-  return base + memoryNote
+  // Tone applies to DALVE herself only, not sub-agents — an agent's own systemPrompt is already
+  // an authored persona the user opted into when creating it, matching geminiLive.ts's reasoning.
+  const tone = settingsStore.getDalveTone()
+  const toneNote = !agent && tone !== 'default' ? `\n\n${DALVE_TONE_PROMPTS[tone]}` : ''
+  return base + toneNote + memoryNote
 }
 
 // Groq's free tier caps this model at 8,000 tokens/minute AND 3 images per request — confirmed
@@ -622,6 +628,20 @@ const STATIC_TOOLS: ChatCompletionTool[] = [
   }),
   tool('list_reminders', 'Lists every upcoming reminder and scheduled message.', { type: 'object', properties: {} }),
   tool('cancel_reminder', 'Cancels a reminder or scheduled message by its exact title.', { type: 'object', properties: { title: { type: 'string' } }, required: ['title'] }),
+  tool('list_common_folders', "Returns the user's real Home/Desktop/Documents/Downloads/Pictures folder paths — use this to build real file paths instead of guessing them.", { type: 'object', properties: {} }),
+  tool('list_directory', 'Lists files and subfolders in a real directory path.', { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] }),
+  tool('read_text_file', 'Reads a plain text/code/markdown/csv/json file. For PDFs or images use read_document instead.', { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] }),
+  tool('write_text_file', 'Writes (or appends to) a plain text file, creating it if it does not exist.', {
+    type: 'object',
+    properties: { path: { type: 'string' }, content: { type: 'string' }, append: { type: 'boolean' } },
+    required: ['path', 'content']
+  }),
+  tool('delete_file', 'Moves a file to the Recycle Bin (recoverable, not a permanent delete).', { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] }),
+  tool('move_file', 'Moves or renames a file from one path to another.', { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' } }, required: ['from', 'to'] }),
+  tool('search_files', 'Searches for files by (partial, case-insensitive) filename under a directory, recursively.', { type: 'object', properties: { directory: { type: 'string' }, query: { type: 'string' } }, required: ['directory', 'query'] }),
+  tool('read_document', 'Reads a document by real file path — text/code/markdown/csv/json directly, PDFs via real text extraction, images attached as vision content for you to actually see. .docx and other office formats are not supported yet.', { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] }),
+  tool('read_clipboard', "Reads the current text on the user's OS clipboard.", { type: 'object', properties: {} }),
+  tool('write_clipboard', "Sets the user's OS clipboard to the given text.", { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] }),
   tool('start_autonomous_task', 'Hands off a task to a background loop that keeps watching the screen and acting even after this conversation ends.', {
     type: 'object',
     properties: { goal: { type: 'string' } },
@@ -858,6 +878,39 @@ async function executeVoiceTool(name: string, args: Record<string, unknown>): Pr
       return { result: listRemindersTool() }
     case 'cancel_reminder':
       return cancelReminderTool(String(args.title ?? ''))
+    case 'list_common_folders':
+      return { result: JSON.stringify(fileTools.listCommonFolders()) }
+    case 'list_directory':
+      return await fileTools.listDirectory(String(args.path ?? ''))
+    case 'read_text_file':
+      return await fileTools.readTextFile(String(args.path ?? ''))
+    case 'write_text_file':
+      return await fileTools.writeTextFile(String(args.path ?? ''), String(args.content ?? ''), Boolean(args.append))
+    case 'delete_file':
+      return await fileTools.deleteFile(String(args.path ?? ''))
+    case 'move_file':
+      return await fileTools.moveFile(String(args.from ?? ''), String(args.to ?? ''))
+    case 'search_files':
+      return await fileTools.searchFiles(String(args.directory ?? ''), String(args.query ?? ''))
+    case 'read_document': {
+      const doc = await fileTools.readDocument(String(args.path ?? ''))
+      if (doc.imageBase64) {
+        // Attached directly onto history (not just returned as a tool result) so the model
+        // actually sees it as vision content on the next round — the same mechanism already used
+        // for screenshots. stripOldImages() on the next utterance demotes this once superseded.
+        history.push({
+          role: 'user',
+          content: [{ type: 'image_url', image_url: { url: `data:${doc.mimeType};base64,${doc.imageBase64}` } }]
+        })
+        return { status: 'SUCCESS', result: 'Image attached above — look at it directly.' }
+      }
+      return { status: doc.status, result: doc.text, error: doc.error }
+    }
+    case 'read_clipboard':
+      return { result: fileTools.readClipboardText() }
+    case 'write_clipboard':
+      fileTools.writeClipboardText(String(args.text ?? ''))
+      return { result: 'Clipboard set.' }
     case 'start_autonomous_task': {
       const goal = String(args.goal ?? '').trim()
       if (!goal) return { error: 'No goal given.' }

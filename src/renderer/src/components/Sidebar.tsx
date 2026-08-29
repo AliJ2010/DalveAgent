@@ -1,4 +1,4 @@
-import { Globe, Plug, Zap, BookOpen, CalendarDays, Settings } from 'lucide-react'
+import { Globe, Plug, Zap, BookOpen, CalendarDays, ScrollText, Settings, ShieldAlert } from 'lucide-react'
 import { useUiStore, type Screen } from '../state/uiStore'
 
 interface RailItem {
@@ -12,7 +12,8 @@ const TOP_ITEMS: RailItem[] = [
   { icon: Plug, screen: 'integrations', label: 'Integrations' },
   { icon: Zap, screen: 'agents', label: 'Agents' },
   { icon: BookOpen, screen: 'knowledge', label: 'Knowledge' },
-  { icon: CalendarDays, screen: 'calendar', label: 'Calendar' }
+  { icon: CalendarDays, screen: 'calendar', label: 'Calendar' },
+  { icon: ScrollText, screen: 'logs', label: 'Logs' }
 ]
 
 export function Sidebar(): React.JSX.Element {
@@ -62,6 +63,23 @@ export function Sidebar(): React.JSX.Element {
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'center' }}>
+        <button
+          title="Privacy panic — stop mic/camera/screen-share and close DALVE (Ctrl+Alt+Q)"
+          onClick={() => {
+            if (window.confirm('Stop everything and close DALVE right now?')) void window.dalve.panic.trigger()
+          }}
+          style={{
+            width: 36,
+            height: 36,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderRadius: 8,
+            color: '#e05a5a'
+          }}
+        >
+          <ShieldAlert size={18} strokeWidth={1.6} />
+        </button>
         <button
           title="Settings"
           onClick={() => setScreen('settings')}

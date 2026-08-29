@@ -2,7 +2,9 @@ import { useVoiceStore } from '../state/voiceStore'
 import { useScreenControlStore } from '../state/screenControlStore'
 import { useAutonomousTaskStore } from '../state/autonomousTaskStore'
 import { useActionTimelineStore } from '../state/actionTimelineStore'
+import { useSettingsStore } from '../state/settingsStore'
 import { startAudioCapture, type AudioCaptureHandle } from './audioCapture'
+import { startWakeWordCapture, type WakeWordCaptureHandle } from './wakeWordCapture'
 import { AudioPlayer } from './audioPlayback'
 
 let captureHandle: AudioCaptureHandle | null = null
@@ -11,6 +13,9 @@ let bridgeInitialized = false
 let screenControlBridgeInitialized = false
 let autonomousTaskBridgeInitialized = false
 let wakeTriggerBridgeInitialized = false
+let wakeWordBridgeInitialized = false
+let wakeWordCaptureHandle: WakeWordCaptureHandle | null = null
+let wakeWordStarting = false
 
 // Whisper detection: a real, unscaled RMS reading of the mic (see audioCapture.ts's onRawLevel,
 // separate from the amplified onLevel used for the VU meter) collected while the user is actually
@@ -181,6 +186,63 @@ export function initWakeTriggerBridge(): void {
   window.dalve.wake.onTriggered(() => {
     void startVoiceSession(null)
   })
+}
+
+/** Starts (or leaves alone, if already running) the wake-word listener — only when it's actually
+ *  configured/enabled AND no real voice session is using the mic right now. Safe to call
+ *  liberally; every early-return is a genuine no-op. */
+async function tryStartWakeWord(): Promise<void> {
+  if (wakeWordCaptureHandle || wakeWordStarting) return
+  const settings = useSettingsStore.getState().settings
+  if (!settings?.wakeWordEnabled || !settings.picovoiceAccessKeySet) return
+  if (useVoiceStore.getState().sessionState !== 'idle') return
+
+  wakeWordStarting = true
+  try {
+    const result = await window.dalve.wakeWord.start()
+    // Re-check: a real session may have started, or the feature may have been turned off, while
+    // that IPC round-trip was in flight.
+    if (result.status !== 'SUCCESS' || !result.frameLength || useVoiceStore.getState().sessionState !== 'idle') {
+      if (result.status !== 'SUCCESS') console.error('[wakeWord] failed to start:', result.message)
+      void window.dalve.wakeWord.stop()
+      return
+    }
+    wakeWordCaptureHandle = await startWakeWordCapture(result.frameLength, (chunk) => window.dalve.wakeWord.sendAudioChunk(chunk))
+  } catch (err) {
+    console.error('[wakeWord] failed to start capture:', err)
+  } finally {
+    wakeWordStarting = false
+  }
+}
+
+function stopWakeWordListening(): void {
+  wakeWordCaptureHandle?.stop()
+  wakeWordCaptureHandle = null
+  void window.dalve.wakeWord.stop()
+}
+
+/** Reacts to both session-state changes (stop the instant a real session starts, resume once
+ *  idle again) and settings changes (the feature being turned on/off, or a key just being added).
+ *  Also makes one attempt at startup in case it's already configured and enabled. */
+export function initWakeWordBridge(): void {
+  if (wakeWordBridgeInitialized) return
+  wakeWordBridgeInitialized = true
+
+  useVoiceStore.subscribe((state, prev) => {
+    if (state.sessionState === prev.sessionState) return
+    if (state.sessionState === 'idle') void tryStartWakeWord()
+    else stopWakeWordListening()
+  })
+
+  useSettingsStore.subscribe((state, prev) => {
+    const wasOn = prev.settings?.wakeWordEnabled && prev.settings.picovoiceAccessKeySet
+    const isOn = state.settings?.wakeWordEnabled && state.settings.picovoiceAccessKeySet
+    if (wasOn === isOn) return
+    if (isOn) void tryStartWakeWord()
+    else stopWakeWordListening()
+  })
+
+  void tryStartWakeWord()
 }
 
 async function ensureSession(agentId: string | null): Promise<void> {

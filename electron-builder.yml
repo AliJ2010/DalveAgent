@@ -16,6 +16,9 @@ asarUnpack:
   # class of problem robotjs had — so it needs to live outside the asar archive too.
   - node_modules/tesseract.js/**
   - node_modules/tesseract.js-core/**
+  # Porcupine (wake word) loads a prebuilt native shared library per-platform from a real file
+  # path at runtime, plus the built-in .ppn keyword files — same class of problem as the above.
+  - node_modules/@picovoice/porcupine-node/**
 # Playwright's actual browser binary lives outside node_modules and isn't part of electron-
 # builder's normal file selection at all. Bundled via afterPack (build/afterPack.js) — a plain
 # post-packaging file copy — rather than `files`/`extraResources`: confirmed empirically that

@@ -101,6 +101,35 @@ export interface SettingsState {
    *  account) so they still show up as pickable options alongside the ones fetched from /v2/voices. */
   elevenLabsCustomVoices: { voiceId: string; name: string }[]
   voiceEngine: 'gemini' | 'groq'
+  dalveTone: DalveTone
+  picovoiceAccessKeySet: boolean
+  wakeWordEnabled: boolean
+  /** One of the built-in keywords Porcupine ships with no training needed, or 'custom' to use
+   *  wakeWordCustomPath instead — "Hey DALVE" specifically requires the user to train a keyword
+   *  file once (free) at console.picovoice.ai and point to it, there's no way around that step. */
+  wakeWordKeyword: BuiltinWakeWord | 'custom'
+  wakeWordCustomPath?: string
+}
+
+export const BUILTIN_WAKE_WORDS = ['jarvis', 'computer', 'porcupine', 'picovoice', 'alexa', 'terminator'] as const
+export type BuiltinWakeWord = (typeof BUILTIN_WAKE_WORDS)[number]
+
+export type DalveTone = 'default' | 'formal' | 'casual' | 'playful' | 'direct'
+
+export const DALVE_TONE_LABELS: Record<DalveTone, string> = {
+  default: 'Default',
+  formal: 'Formal',
+  casual: 'Casual',
+  playful: 'Playful',
+  direct: 'Direct'
+}
+
+export const DALVE_TONE_PROMPTS: Record<DalveTone, string> = {
+  default: '',
+  formal: 'Speak formally and professionally — no slang, no casual contractions, precise and measured phrasing.',
+  casual: "Speak casually and conversationally, like a close friend — contractions, informal phrasing, relaxed tone.",
+  playful: "Speak with personality — light humor and playful phrasing are welcome, don't be afraid to have fun with a response, while still actually being useful.",
+  direct: 'Be maximally direct and terse — no pleasantries, no hedging, no filler. Shortest phrasing that is still clear.'
 }
 
 /** One tracked-hand frame from the renderer's camera+MediaPipe pipeline, sent to the main

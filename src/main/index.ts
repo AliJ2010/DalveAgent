@@ -29,6 +29,7 @@ import { attachWindow as attachHandTrackingWindow, stop as stopHandTracking } fr
 import { attachWindow as attachSkillsStoreWindow } from './lib/skillsStore'
 import { attachWindow as attachScheduleStoreWindow } from './lib/scheduleStore'
 import { startScheduler } from './lib/scheduler'
+import * as wakeWord from './lib/wakeWord'
 import { initAutoUpdate } from './lib/autoUpdate'
 import { initTelegramBridge } from './lib/telegramBridge'
 import { reconnectAll as reconnectMcpServers } from './lib/mcpClient'
@@ -75,6 +76,22 @@ function showMainWindow(): void {
 // of "monitor 3" without asking Windows for its own labels.
 const HOTKEY_MONITOR_INDEX = 2
 
+/** Ctrl+Alt+Q, the tray menu, and a renderer-triggered IPC call all land here — instantly stops
+ *  every sensor (mic, screen share, hand-tracking camera, autonomous task) and then actually
+ *  quits the process, not just hides to tray. The whole point of a panic control is speed: no
+ *  confirmation dialog, no "are you sure" — someone hitting this wants everything off right now. */
+function panicShutdown(): void {
+  log.info('[main] panic shutdown triggered')
+  stopVoiceSession()
+  stopGroqVoiceSession()
+  stopScreenControl()
+  stopHandTracking()
+  stopAutonomousTask('privacy panic shutdown')
+  wakeWord.stop()
+  isQuitting = true
+  app.quit()
+}
+
 /** Ctrl+Alt+D: jump to the designated monitor, fullscreen, and start listening immediately. */
 function openAndListen(): void {
   if (!mainWindow) return
@@ -104,6 +121,8 @@ function createTray(): void {
       // the window first — the whole point of an autonomous task is that it can be running while
       // the window is hidden in the tray. Harmless no-op if nothing is currently running.
       { label: 'Stop Autonomous Task', click: () => stopAutonomousTask('stopped from tray') },
+      { type: 'separator' },
+      { label: 'Privacy Panic (stop everything + quit)', click: panicShutdown },
       { type: 'separator' },
       { label: 'Quit DALVE', click: () => app.quit() }
     ])
@@ -150,6 +169,7 @@ function createWindow(): void {
     stopGroqVoiceSession()
     stopScreenControl()
     stopHandTracking()
+    wakeWord.stop()
     mainWindow = null
   })
 
@@ -197,6 +217,19 @@ if (gotSingleInstanceLock) {
     // IPC test
     ipcMain.on('ping', () => console.log('pong'))
 
+    // Lets the renderer's own panic button trigger the exact same shutdown as the hotkey/tray.
+    ipcMain.handle('panic:trigger', panicShutdown)
+
+    // --- Wake word: renderer runs its own dedicated mic-capture pipeline (see
+    // wakeWordCapture.ts) and streams raw PCM frames here for Porcupine to actually process. ---
+    ipcMain.handle('wakeWord:start', () => wakeWord.start())
+    ipcMain.handle('wakeWord:stop', () => wakeWord.stop())
+    ipcMain.on('wakeWord:audioChunk', (_e, base64Pcm16: string) => {
+      const bytes = Buffer.from(base64Pcm16, 'base64')
+      const frame = new Int16Array(bytes.buffer, bytes.byteOffset, bytes.length / 2)
+      wakeWord.processFrame(frame, openAndListen)
+    })
+
     registerIpcHandlers()
 
     // Explicitly grant microphone access — DALVE's voice input depends on it.
@@ -225,6 +258,9 @@ if (gotSingleInstanceLock) {
     // focus. Unlike a normal tray-click reopen, it jumps straight to fullscreen on the
     // designated monitor and starts listening immediately.
     globalShortcut.register('Control+Alt+D', openAndListen)
+    // Panic control — a distinct, easy-to-remember combo well away from Ctrl+Alt+D so an
+    // accidental extra keypress can't turn a "start listening" attempt into a full shutdown.
+    globalShortcut.register('Control+Alt+Q', panicShutdown)
 
     app.on('activate', function () {
       // On macOS it's common to re-create a window in the app when the

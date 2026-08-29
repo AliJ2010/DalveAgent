@@ -1,4 +1,6 @@
-import { app, ipcMain, shell, BrowserWindow } from 'electron'
+import { app, ipcMain, shell, BrowserWindow, dialog } from 'electron'
+import log from 'electron-log/main'
+import { readFileSync } from 'fs'
 import { settingsStore } from '../lib/settingsStore'
 import { agentStore } from '../lib/agentStore'
 import { generateAgentFromPrompt } from '../lib/agentGenerator'
@@ -11,7 +13,7 @@ import * as cloudSync from '../lib/cloudSync'
 import * as handTracking from '../lib/handTracking'
 import * as mcpClient from '../lib/mcpClient'
 import { scheduleStore } from '../lib/scheduleStore'
-import type { AgentConfig, HandFrame, ScheduleItem, ScheduleRecurrence } from '@shared/types'
+import type { AgentConfig, BuiltinWakeWord, DalveTone, HandFrame, ScheduleItem, ScheduleRecurrence } from '@shared/types'
 
 export function registerIpcHandlers(): void {
   // Lets the UI show the real running version, e.g. to confirm an auto-update actually landed
@@ -19,6 +21,19 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('app:getVersion', () => app.getVersion())
   // Called once at launch to drive the "you're on vX" / "just updated to vX" startup popup.
   ipcMain.handle('app:checkVersionUpdate', () => settingsStore.checkVersionUpdate(app.getVersion()))
+
+  // --- Logs (an in-app viewer so the user doesn't need to hand a log file over to debug) ---
+  ipcMain.handle('logs:read', (_e, filter: 'all' | 'warnErr', maxLines: number) => {
+    try {
+      const path = log.transports.file.getFile().path
+      const raw = readFileSync(path, 'utf-8')
+      let lines = raw.split(/\r?\n/).filter(Boolean)
+      if (filter === 'warnErr') lines = lines.filter((l) => /\[(warn|error)\]/i.test(l))
+      return { path, lines: lines.slice(-maxLines) }
+    } catch (err) {
+      return { path: '', lines: [], error: err instanceof Error ? err.message : String(err) }
+    }
+  })
 
   // --- Settings ---
   ipcMain.handle('settings:get', () => settingsStore.getState())
@@ -56,6 +71,34 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('settings:setVoiceEngine', (_e, engine: 'gemini' | 'groq') => {
     settingsStore.setVoiceEngine(engine)
     return settingsStore.getState()
+  })
+
+  ipcMain.handle('settings:setDalveTone', (_e, tone: DalveTone) => {
+    settingsStore.setDalveTone(tone)
+    return settingsStore.getState()
+  })
+
+  ipcMain.handle('settings:setPicovoiceAccessKey', (_e, key: string) => {
+    settingsStore.setPicovoiceAccessKey(key)
+    return settingsStore.getState()
+  })
+
+  ipcMain.handle('settings:setWakeWordEnabled', (_e, enabled: boolean) => {
+    settingsStore.setWakeWordEnabled(enabled)
+    return settingsStore.getState()
+  })
+
+  ipcMain.handle('settings:setWakeWordKeyword', (_e, keyword: BuiltinWakeWord | 'custom', customPath?: string) => {
+    settingsStore.setWakeWordKeyword(keyword, customPath)
+    return settingsStore.getState()
+  })
+
+  ipcMain.handle('settings:pickWakeWordFile', async (_e) => {
+    const win = BrowserWindow.getFocusedWindow()
+    const result = win
+      ? await dialog.showOpenDialog(win, { properties: ['openFile'], filters: [{ name: 'Porcupine keyword file', extensions: ['ppn'] }] })
+      : await dialog.showOpenDialog({ properties: ['openFile'], filters: [{ name: 'Porcupine keyword file', extensions: ['ppn'] }] })
+    return result.canceled ? null : result.filePaths[0]
   })
 
   // Lets a voice be added by ID directly — needed for shared/library ElevenLabs voices that
