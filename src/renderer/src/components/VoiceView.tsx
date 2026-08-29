@@ -1,9 +1,11 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
-import { ParticleSphere } from './ParticleSphere'
+import { ParticleOrb } from './ParticleOrb'
+import type { OrbState } from '../particles/particleOrbEngine'
 import { BackgroundSpheres } from './BackgroundSpheres'
 import { AgentSwitcher } from './AgentSwitcher'
 import { useVoiceStore } from '../state/voiceStore'
+import { useAutonomousTaskStore } from '../state/autonomousTaskStore'
 import { useActiveAgentAccent } from '../lib/useActiveAgentAccent'
 import { hexToRgbString } from '../lib/color'
 
@@ -15,11 +17,22 @@ export function VoiceView(): React.JSX.Element {
   const toolActive = useVoiceStore((s) => s.toolActive)
   const toolActiveLabel = useVoiceStore((s) => s.toolActiveLabel)
   const audioLevel = useVoiceStore((s) => s.audioLevel)
+  const autonomousActive = useAutonomousTaskStore((s) => s.active)
   const accent = useActiveAgentAccent()
   const [viewIdx, setViewIdx] = useState(0)
 
   const sphereColor = hexToRgbString(accent.hex)
   const activeLabel = accent.name.toUpperCase().split('').join(' ')
+
+  // Real DALVE state drives the orb's contained/thinking/unbound behavior, not a demo toggle:
+  // an autonomous task running unattended is DALVE genuinely "out there" acting independently —
+  // that's the unbound state's real trigger. A tool actively executing mid-conversation is the
+  // thinking/peeling-apart state. Everything else falls back to the plain voice session state.
+  const orbState: OrbState = useMemo(() => {
+    if (autonomousActive) return 'unbound'
+    if (toolActive) return 'thinking'
+    return sessionState
+  }, [autonomousActive, toolActive, sessionState])
 
   return (
     <div style={{ position: 'relative', flex: 1, overflow: 'hidden' }}>
@@ -62,13 +75,7 @@ export function VoiceView(): React.JSX.Element {
               transformOrigin: 'center'
             }}
           >
-            <ParticleSphere
-              size={360}
-              state={sessionState}
-              color={sphereColor}
-              pointCount={520}
-              level={audioLevel}
-            />
+            <ParticleOrb size={360} state={orbState} color={sphereColor} level={audioLevel} />
           </div>
 
           {toolActive && (
