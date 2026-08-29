@@ -190,6 +190,16 @@ function looksLikeStaleAuthConfig(err: unknown): boolean {
   return /auth.?config/i.test(text) && /not.?found/i.test(text)
 }
 
+/** A real, confirmed case (Stripe MCP): some toolkits — usually MCP-wrapped variants of a normal
+ *  app — have no Composio-managed OAuth app at all and need the CALLER's own client id/secret,
+ *  which DALVE has no UI for yet. Surfaces as a raw "Default auth config not found... does not
+ *  have managed credentials for this toolkit" 404 otherwise — this turns that into something
+ *  actually actionable instead of a JSON dump. */
+function looksLikeNoManagedCredentials(err: unknown): boolean {
+  const text = err instanceof Error ? err.message : String(err)
+  return /does not have managed credentials/i.test(text) || /use_custom_auth/i.test(text)
+}
+
 /**
  * Runs a connect action against the cached auth config, and transparently retries once with a
  * freshly created one if the cached id has gone stale — e.g. deleted via Composio's own
@@ -202,10 +212,15 @@ async function withAuthConfig<T>(
   toolkitSlug: string,
   fn: (authConfigId: string) => Promise<T>
 ): Promise<T> {
-  const authConfigId = await ensureAuthConfigId(toolkitSlug)
   try {
+    const authConfigId = await ensureAuthConfigId(toolkitSlug)
     return await fn(authConfigId)
   } catch (err) {
+    if (looksLikeNoManagedCredentials(err)) {
+      throw new Error(
+        `"${toolkitSlug}" doesn't have Composio-managed credentials available — it needs its own OAuth app (client ID/secret), which DALVE doesn't have a way to enter yet. If a plain version of this app exists without "MCP" in the name, try connecting that instead.`
+      )
+    }
     if (!looksLikeStaleAuthConfig(err)) throw err
     console.error(`[composio] cached auth config for ${toolkitSlug} is stale, recreating:`, err)
     const freshId = await ensureAuthConfigId(toolkitSlug, true)

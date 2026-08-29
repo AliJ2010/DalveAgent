@@ -12,6 +12,36 @@ let screenControlBridgeInitialized = false
 let autonomousTaskBridgeInitialized = false
 let wakeTriggerBridgeInitialized = false
 
+// Whisper detection: a real, unscaled RMS reading of the mic (see audioCapture.ts's onRawLevel,
+// separate from the amplified onLevel used for the VU meter) collected while the user is actually
+// talking. Decided once per turn, right as DALVE's reply starts playing, rather than adjusted
+// continuously — a reply shouldn't change volume mid-sentence. Thresholds are a first pass with no
+// live mic to tune against, same caveat as this session's other RMS-based heuristics (VAD,
+// barge-in, hand-tracking pinch distances).
+const WHISPER_SILENCE_FLOOR = 0.01
+const WHISPER_CEILING = 0.045
+const WHISPER_REPLY_VOLUME = 0.35
+const NORMAL_REPLY_VOLUME = 1
+let listeningLevels: number[] = []
+
+function trackRawLevelForWhisper(rms: number): void {
+  // Mic capture runs continuously regardless of session phase — gating on 'listening' here (not
+  // just clearing the buffer when it starts) keeps ambient noise picked up while DALVE is
+  // speaking/thinking from contaminating the next utterance's whisper classification.
+  if (useVoiceStore.getState().sessionState !== 'listening') return
+  if (rms > WHISPER_SILENCE_FLOOR) listeningLevels.push(rms)
+}
+
+/** Called right as a reply starts playing — looks at how loud the just-finished utterance was and
+ *  sets the reply's playback volume accordingly, then clears the buffer for the next utterance. */
+function applyWhisperVolumeForReply(): void {
+  if (listeningLevels.length > 0) {
+    const avg = listeningLevels.reduce((a, b) => a + b, 0) / listeningLevels.length
+    player?.setVolume(avg < WHISPER_CEILING ? WHISPER_REPLY_VOLUME : NORMAL_REPLY_VOLUME)
+  }
+  listeningLevels = []
+}
+
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Something went wrong.'
 }
@@ -51,6 +81,11 @@ export function initVoiceBridge(): void {
     const store = useVoiceStore.getState()
     switch (event.type) {
       case 'state':
+        // Order matters: decide the reply's volume from what was JUST collected before either
+        // resetting for a fresh listening phase or overwriting sessionState (which this checks
+        // against to catch only the transition INTO speaking, not every 'speaking' event).
+        if (event.state === 'speaking' && store.sessionState !== 'speaking') applyWhisperVolumeForReply()
+        if (event.state === 'listening') listeningLevels = []
         store.setSessionState(event.state)
         break
       case 'inputTranscript':
@@ -162,7 +197,8 @@ export async function startVoiceSession(agentId: string | null = null): Promise<
     if (!captureHandle) {
       captureHandle = await startAudioCapture(
         (chunk) => window.dalve.voice.sendAudioChunk(chunk),
-        (level) => useVoiceStore.getState().setAudioLevel(level)
+        (level) => useVoiceStore.getState().setAudioLevel(level),
+        trackRawLevelForWhisper
       )
     }
   } catch (err) {
@@ -174,6 +210,8 @@ export async function startVoiceSession(agentId: string | null = null): Promise<
 export async function stopVoiceSession(): Promise<void> {
   captureHandle?.stop()
   captureHandle = null
+  listeningLevels = []
+  player?.setVolume(NORMAL_REPLY_VOLUME)
   await window.dalve.voice.stop()
   useVoiceStore.getState().setSessionState('idle')
   useVoiceStore.getState().setAudioLevel(0)

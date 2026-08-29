@@ -16,7 +16,11 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
  */
 export async function startAudioCapture(
   onChunk: (base64Pcm16: string) => void,
-  onLevel?: (level: number) => void
+  onLevel?: (level: number) => void,
+  /** Reports the TRUE, unscaled RMS per chunk — separate from onLevel, which is deliberately
+   *  amplified/clamped for a punchier VU-meter visual and so not usable for real amplitude
+   *  classification (e.g. detecting a whisper vs. normal speech). */
+  onRawLevel?: (rms: number) => void
 ): Promise<AudioCaptureHandle> {
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
@@ -45,12 +49,13 @@ export async function startAudioCapture(
       sumSquares += s * s
     }
     onChunk(arrayBufferToBase64(pcm16.buffer))
-    if (onLevel) {
+    if (onLevel || onRawLevel) {
+      const rms = Math.sqrt(sumSquares / input.length)
       // RMS amplitude, scaled up since normal mic speech rarely approaches 1.0 — this is a
       // visual cue, not a metering standard, so a punchier response reads better than a
       // technically-correct but visually flat one.
-      const rms = Math.sqrt(sumSquares / input.length)
-      onLevel(Math.min(1, rms * 4))
+      onLevel?.(Math.min(1, rms * 4))
+      onRawLevel?.(rms)
     }
   }
 

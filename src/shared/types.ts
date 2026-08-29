@@ -112,8 +112,12 @@ export interface HandFrame {
   /** Normalized thumb-to-index and thumb-to-middle fingertip distances, for left/right-click. */
   thumbIndexDist: number
   thumbMiddleDist: number
-  /** How "open" the hand is right now (normalized) and the palm's vertical position — together
-   *  drive the zoom gesture. */
+  /** Normalized index-to-middle fingertip distance — the third leg of the thumb/index/middle
+   *  triangle. Needed for the zoom gesture (a genuine 3-finger pinch/spread moves all three
+   *  pairwise distances together) and to gate left/right-click engagement so a 3-finger zoom
+   *  motion can't be misread as a 2-finger click mid-gesture. */
+  indexMiddleDist: number
+  /** How "open" the hand is right now (normalized) and the palm's vertical position. */
   spread: number
   palmY: number
 }

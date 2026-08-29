@@ -13,12 +13,21 @@ export class AudioPlayer {
   private ctx: AudioContext
   private nextStartTime = 0
   private activeSources: AudioBufferSourceNode[] = []
+  private gainNode: GainNode
   /** Set by the caller to receive a real-time 0-1 amplitude reading of what's actually playing —
    *  drives a live visual pulse tied to Gemini's real speech, not a canned animation. */
   onLevel?: (level: number) => void
 
   constructor() {
     this.ctx = new AudioContext({ sampleRate: 24000 })
+    this.gainNode = this.ctx.createGain()
+    this.gainNode.connect(this.ctx.destination)
+  }
+
+  /** Scales the volume of everything enqueued from now on (0-1) — used to make DALVE's reply
+   *  play back quieter right after the user whispered, without needing per-chunk changes. */
+  setVolume(gain: number): void {
+    this.gainNode.gain.setTargetAtTime(Math.max(0, Math.min(1, gain)), this.ctx.currentTime, 0.05)
   }
 
   enqueue(base64Pcm16: string): void {
@@ -42,7 +51,7 @@ export class AudioPlayer {
 
     const source = this.ctx.createBufferSource()
     source.buffer = buffer
-    source.connect(this.ctx.destination)
+    source.connect(this.gainNode)
     source.onended = () => {
       this.activeSources = this.activeSources.filter((s) => s !== source)
     }

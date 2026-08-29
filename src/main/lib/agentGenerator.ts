@@ -11,7 +11,13 @@ function titleCase(words: string): string {
     .split(/\s+/)
     .filter(Boolean)
     .slice(0, 2)
-    .map((w) => w[0].toUpperCase() + w.slice(1).toLowerCase())
+    .map((w) => {
+      // An already-all-caps word (CS, DAA, AI) is almost certainly an intentional acronym, not
+      // something to normalize — forcing it lowercase silently destroyed exactly that on every
+      // name containing one (a real reported bug: "Life CS" became "Life Cs").
+      if (w.length > 1 && w === w.toUpperCase() && w !== w.toLowerCase()) return w
+      return w[0].toUpperCase() + w.slice(1).toLowerCase()
+    })
     .join(' ')
 }
 

@@ -20,6 +20,7 @@ process.on('unhandledRejection', (reason) => {
   log.error('[main] unhandledRejection (kept the app alive):', reason instanceof Error ? reason.stack : reason)
 })
 import { attachWindow, stopVoiceSession } from './lib/geminiLive'
+import { attachWindow as attachGroqVoiceWindow, stopVoiceSession as stopGroqVoiceSession } from './lib/groqVoice'
 import { attachWindow as attachScreenControlWindow, stopAll as stopScreenControl } from './lib/screenControl'
 import { attachWindow as attachAutonomousTaskWindow, stopAutonomousTask } from './lib/autonomousTask'
 import { attachWindow as attachAgentStoreWindow } from './lib/agentStore'
@@ -146,12 +147,14 @@ function createWindow(): void {
 
   mainWindow.on('closed', () => {
     stopVoiceSession()
+    stopGroqVoiceSession()
     stopScreenControl()
     stopHandTracking()
     mainWindow = null
   })
 
   attachWindow(mainWindow)
+  attachGroqVoiceWindow(mainWindow)
   attachScreenControlWindow(mainWindow)
   attachAutonomousTaskWindow(mainWindow)
   attachAgentStoreWindow(mainWindow)

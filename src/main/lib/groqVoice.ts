@@ -131,7 +131,7 @@ export async function startVoiceSession(agentId: string | null = null): Promise<
   if (agentId && !agent) throw new Error('That agent no longer exists.')
 
   activeAgentId = agentId
-  history = []
+  history = [{ role: 'system', content: buildSystemPrompt(agent) }]
   audioBuffer = []
   speechStartedAt = null
   silenceStartedAt = null
@@ -276,6 +276,19 @@ A single instruction often spans multiple applications — "read the price in th
 
 IMPORTANT structural limit to understand about yourself: this engine only ever takes a turn when the user just spoke — there is no continuous screen watching here at all, unlike a fully live session. Nothing "wakes you up" on its own when a new WhatsApp message arrives while the user isn't talking to you. That is exactly what start_autonomous_task is for — a separate background loop that actively re-checks the screen every ~20 seconds and can act with nobody present. Whenever what's being asked amounts to "keep doing this without me talking to you" — monitoring a chat (WhatsApp especially) and replying to new messages as they come in is the single most common real case — you MUST call start_autonomous_task, every time. Give it a clear one-sentence goal; it keeps going until the goal is done, the user stops it, or you call stop_autonomous_task.`
 
+/** Builds the ACTUAL system prompt for a session — a real bug existed here before: this engine
+ *  always used the generic SYSTEM_PROMPT below regardless of which agent was active, and never
+ *  read back either DALVE's own saved memory or an agent's memory, so remember_fact genuinely
+ *  persisted facts (see the 'remember_fact' case below) that this engine then never saw again —
+ *  "it says it has memory... but it doesn't look like it" was real, not imagined. Mirrors
+ *  geminiLive.ts's equivalent construction so both engines behave the same way here. */
+function buildSystemPrompt(agent: AgentConfig | null): string {
+  const base = agent ? agent.systemPrompt : SYSTEM_PROMPT
+  const memory = agent ? agent.memory : settingsStore.getDalveMemory()
+  const memoryNote = memory ? `\n\nThings you've saved to remember from earlier conversations:\n${memory}` : ''
+  return base + memoryNote
+}
+
 // Groq's free tier caps this model at 8,000 tokens/minute AND 3 images per request — confirmed
 // live from real logs showing repeated 413 "tokens per minute" and 400 "too many images" errors.
 // A full-resolution screenshot resent on every turn (history kept every prior one, unbounded)
@@ -334,7 +347,12 @@ async function runTurn(userText: string): Promise<void> {
     if (screenshot) {
       content.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${screenshot}` } })
     }
-    if (history.length === 0) history.push({ role: 'system', content: SYSTEM_PROMPT })
+    // Defensive fallback only — startVoiceSession always seeds this now; kept in case this is
+    // ever reached with no active session.
+    if (history.length === 0) {
+      const agent = activeAgentId ? (agentStore.get(activeAgentId) ?? null) : null
+      history.push({ role: 'system', content: buildSystemPrompt(agent) })
+    }
     history.push({ role: 'user', content })
     stripOldImages(history)
     trimHistory()

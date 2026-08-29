@@ -25,16 +25,28 @@ export function AgentConfigModal(): React.JSX.Element | null {
 
   const agent = agents.find((a) => a.id === selectedAgentId)
   const [tab, setTab] = useState<Tab>('Prompt & Identity')
+  const [name, setName] = useState('')
   const [prompt, setPrompt] = useState('')
   const [memory, setMemory] = useState('')
 
   useEffect(() => {
     if (agent) {
+      setName(agent.name)
       setPrompt(agent.systemPrompt)
       setMemory(agent.memory)
       setTab('Prompt & Identity')
     }
   }, [agent?.id])
+
+  // Auto-save name (debounced) — trimmed and never allowed to save empty, so a name field
+  // mid-edit can't leave the agent with a blank name.
+  useEffect(() => {
+    if (!agent) return
+    const trimmed = name.trim()
+    if (!trimmed || trimmed === agent.name) return
+    const t = setTimeout(() => update(agent.id, { name: trimmed }), 600)
+    return () => clearTimeout(t)
+  }, [name, agent, update])
 
   // Auto-save system prompt (debounced)
   useEffect(() => {
@@ -174,24 +186,72 @@ export function AgentConfigModal(): React.JSX.Element | null {
           {tab === 'Prompt & Identity' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
               <div>
-                <div className="tracked-label" style={{ color: 'var(--c-gold)', marginBottom: 8 }}>
-                  Color
+                <div
+                  className="tracked-label"
+                  style={{ color: 'var(--c-gold)', marginBottom: 8, display: 'flex', justifyContent: 'space-between' }}
+                >
+                  <span>Name</span>
+                  <span style={{ color: 'var(--c-text-3)' }}>Auto-saves</span>
                 </div>
                 <input
-                  type="range"
-                  min={0}
-                  max={360}
-                  value={hexToHue(agent.color)}
-                  onChange={(e) => update(agent.id, { color: hslToHex(Number(e.target.value), 75, 55) })}
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
                   style={{
                     width: '100%',
-                    height: 8,
-                    borderRadius: 999,
-                    appearance: 'none',
-                    background:
-                      'linear-gradient(to right, #ff0000, #ffff00, #00ff00, #00ffff, #0000ff, #ff00ff, #ff0000)'
+                    background: 'rgba(255,255,255,0.03)',
+                    border: '1px solid var(--c-panel-border)',
+                    borderRadius: 8,
+                    padding: '10px 12px',
+                    color: 'var(--c-text-1)',
+                    fontSize: 13
                   }}
                 />
+              </div>
+              <div>
+                <div
+                  className="tracked-label"
+                  style={{ color: 'var(--c-gold)', marginBottom: 8, display: 'flex', justifyContent: 'space-between' }}
+                >
+                  <span>Color</span>
+                  <span style={{ color: 'var(--c-text-3)', fontWeight: 400, letterSpacing: 0 }}>
+                    Any color (incl. white) →
+                  </span>
+                </div>
+                <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                  <input
+                    type="range"
+                    min={0}
+                    max={360}
+                    value={hexToHue(agent.color)}
+                    onChange={(e) => update(agent.id, { color: hslToHex(Number(e.target.value), 75, 55) })}
+                    style={{
+                      flex: 1,
+                      height: 8,
+                      borderRadius: 999,
+                      appearance: 'none',
+                      background:
+                        'linear-gradient(to right, #ff0000, #ffff00, #00ff00, #00ffff, #0000ff, #ff00ff, #ff0000)'
+                    }}
+                  />
+                  {/* The slider above only ever varies hue at fixed saturation/lightness, so pure
+                      white/black/gray are mathematically unreachable from it — this native picker
+                      covers the full range including those. */}
+                  <input
+                    type="color"
+                    value={agent.color}
+                    onChange={(e) => update(agent.id, { color: e.target.value })}
+                    style={{
+                      width: 34,
+                      height: 28,
+                      padding: 0,
+                      border: '1px solid var(--c-panel-border)',
+                      borderRadius: 6,
+                      background: 'transparent',
+                      cursor: 'pointer',
+                      flexShrink: 0
+                    }}
+                  />
+                </div>
               </div>
               <div>
                 <div

@@ -1,11 +1,22 @@
 import { useEffect, useRef, useState } from 'react'
 import { HandLandmarker, FilesetResolver, type NormalizedLandmark } from '@mediapipe/tasks-vision'
-import { Hand, Square, Maximize2, Minimize2 } from 'lucide-react'
+import { Hand, Square, Maximize2 } from 'lucide-react'
 
 // Real pixel dimensions of the preview canvas, not just its on-screen CSS size — drawing at a
-// higher resolution when "large" is picked keeps the bigger preview sharp instead of just
-// upscaling a small blurry buffer.
-const PREVIEW_SIZES = { small: { width: 240, height: 180 }, large: { width: 480, height: 360 } } as const
+// higher resolution for a bigger preview keeps it sharp instead of upscaling a small blurry
+// buffer. Four steps (not just small/large) per direct request for more control over sizing.
+const PREVIEW_SIZES = [
+  { label: 'S', width: 240, height: 180 },
+  { label: 'M', width: 360, height: 270 },
+  { label: 'L', width: 480, height: 360 },
+  { label: 'XL', width: 640, height: 480 }
+] as const
+const PREVIEW_SIZE_KEY = 'dalve-hand-tracking-preview-size'
+
+function loadSavedSizeIndex(): number {
+  const raw = Number(localStorage.getItem(PREVIEW_SIZE_KEY))
+  return Number.isInteger(raw) && raw >= 0 && raw < PREVIEW_SIZES.length ? raw : 0
+}
 
 // Pinned to the exact installed @mediapipe/tasks-vision version — jsdelivr serves each version
 // at its own versioned path, confirmed live to exist for this one; bumping the npm dependency
@@ -47,7 +58,7 @@ function computeSpread(hand: NormalizedLandmark[]): number {
 export function HandTrackingController(): React.JSX.Element {
   const [active, setActive] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [large, setLarge] = useState(false)
+  const [sizeIndex, setSizeIndex] = useState(loadSavedSizeIndex)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const landmarkerRef = useRef<HandLandmarker | null>(null)
@@ -155,6 +166,7 @@ export function HandTrackingController(): React.JSX.Element {
             indexY: hand[INDEX_TIP].y,
             thumbIndexDist: pinchIndex,
             thumbMiddleDist: pinchMiddle,
+            indexMiddleDist: dist(hand[INDEX_TIP], hand[MIDDLE_TIP]),
             spread: computeSpread(hand),
             palmY: hand[WRIST].y
           })
@@ -240,30 +252,40 @@ export function HandTrackingController(): React.JSX.Element {
         >
           <canvas
             ref={canvasRef}
-            width={PREVIEW_SIZES[large ? 'large' : 'small'].width}
-            height={PREVIEW_SIZES[large ? 'large' : 'small'].height}
+            width={PREVIEW_SIZES[sizeIndex].width}
+            height={PREVIEW_SIZES[sizeIndex].height}
             style={{ display: 'block' }}
           />
           <button
-            onClick={() => setLarge((v) => !v)}
-            title={large ? 'Shrink preview' : 'Enlarge preview'}
+            onClick={() => {
+              const next = (sizeIndex + 1) % PREVIEW_SIZES.length
+              setSizeIndex(next)
+              try {
+                localStorage.setItem(PREVIEW_SIZE_KEY, String(next))
+              } catch {
+                // best-effort only
+              }
+            }}
+            title={`Preview size: ${PREVIEW_SIZES[sizeIndex].label} — click to cycle`}
             style={{
               position: 'absolute',
               top: 6,
               right: 6,
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'center',
-              width: 24,
-              height: 24,
+              gap: 4,
+              padding: '3px 8px',
               borderRadius: 6,
               border: '1px solid rgba(212,175,55,0.5)',
               background: 'rgba(0,0,0,0.5)',
               color: 'var(--c-gold-bright)',
-              cursor: 'pointer'
+              cursor: 'pointer',
+              fontSize: 10,
+              fontWeight: 600
             }}
           >
-            {large ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+            <Maximize2 size={12} />
+            {PREVIEW_SIZES[sizeIndex].label}
           </button>
         </div>
       )}
