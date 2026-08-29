@@ -250,6 +250,17 @@ async function onSignedIn(): Promise<void> {
   if (!currentUserId) return
   const supa = getClient()
 
+  // A stale channel from an earlier onSignedIn() call (e.g. a silent session-restore at startup,
+  // then a manual sign-in on top of it — confirmed live on Mac) would otherwise still be
+  // subscribed under the same topic name: Supabase's client returns that SAME channel instance
+  // for .channel('dalve-sync') rather than creating a fresh one, and calling .on() on an
+  // already-subscribed channel throws "cannot add postgres_changes callbacks... after
+  // subscribe()". Tearing down any existing channel first guarantees a clean one to build on.
+  if (channel) {
+    await supa.removeChannel(channel)
+    channel = null
+  }
+
   // First-sync reconciliation is a UNION, never an overwrite: if this account was already used
   // on another device with its own agents (e.g. signing in on the Mac after the Windows PC
   // already pushed Atlas/Scout up), neither side's agents disappear — anything only-local gets

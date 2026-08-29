@@ -270,7 +270,7 @@ async function handleUtterance(pcm16: Buffer): Promise<void> {
 
 const SYSTEM_PROMPT = `You are DALVE, a voice-first AI operating system, talking with the user through voice (Groq + ElevenLabs pipeline). Speak naturally and conversationally, concise since this is spoken. Get straight to doing what's asked — never repeat the instruction back before acting. You have standing authorization to click/type/control the screen and browser once asked; no separate permission tool needed. The only hard limit: never type a password, payment card number, or other credential yourself.
 
-Real targeting priority, strongest to weakest: (1) A direct integration tool (Composio/MCP) if one exists. (2) browser_* tools for anything web-based — real DOM lookup, not a coordinate guess. (3) click_element for native desktop apps with a visible label. (4) click_mouse/move_mouse from the screenshot you're given — last resort, for non-textual content only. For an exact price on a trading chart, always use click_price_level, never click_mouse. For grid/board content (chess, spreadsheets), use define_grid + click_grid_cell.
+Real targeting priority, strongest to weakest: (1) A direct integration tool (Composio/MCP) if one exists. (2) browser_* tools for anything web-based — real DOM lookup, not a coordinate guess. (3) click_element for native desktop apps with a visible label. (4) click_mouse/move_mouse from the screenshot you're given — last resort, for non-textual content only. A few tools (trading-chart price targeting, grid/board targeting, hand tracking, drag, skill recording, undo) aren't available on this engine specifically — if asked for one of those, say so and suggest switching to the Gemini Live engine in Settings rather than guessing with click_mouse.
 
 Never describe a physical action before actually calling the tool, and never describe an outcome (a message sent, a piece moved) until the result confirms it actually happened.
 
@@ -489,164 +489,90 @@ function tool(name: string, description: string, parameters: Record<string, unkn
 const SPEED_ENUM = { type: 'string', enum: ['instant', 'visible'] }
 const BUTTON_ENUM = { type: 'string', enum: ['left', 'right', 'middle'] }
 
+// Kept deliberately small and terse — a real, verified platform constraint, not a style choice:
+// Groq's free plan caps EVERY model at a flat 8,000 tokens/minute total (confirmed live from
+// their own docs), and this whole tools array is resent on every single request regardless of
+// conversation content. The full ~48-tool version with multi-sentence descriptions this used to
+// be was almost certainly consuming most of that budget by itself — real logs showed a two-word
+// "Hello" message triggering a 21,284-token request. Niche tools below are commented with where
+// they still live (Gemini Live and/or the Claude-based autonomous/Telegram tool set) — cut here
+// ONLY to fit Groq's free tier, not removed from DALVE.
 const STATIC_TOOLS: ChatCompletionTool[] = [
-  tool('open_url', "Open a website in the user's default browser.", {
+  tool('open_url', "Open a URL in the user's browser.", { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] }),
+  tool('open_application', 'Opens a native app by name.', { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] }),
+  tool('activate_application', 'Brings a running app to the front by name.', { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] }),
+  tool('fullscreen_window', 'Toggles fullscreen on the frontmost window.', { type: 'object', properties: {} }),
+  tool('create_agent', 'Creates a new companion/bot agent.', {
     type: 'object',
-    properties: { url: { type: 'string' } },
-    required: ['url']
-  }),
-  tool('open_application', 'Opens a native application by name using the OS launch mechanism. Always prefer this over hunting through the Start Menu visually.', {
-    type: 'object',
-    properties: { name: { type: 'string' } },
+    properties: { name: { type: 'string' }, type: { type: 'string', enum: ['companion', 'bot'] }, description: { type: 'string' } },
     required: ['name']
   }),
-  tool('activate_application', 'Brings an already-running application to the front by name.', {
-    type: 'object',
-    properties: { name: { type: 'string' } },
-    required: ['name']
-  }),
-  tool('fullscreen_window', 'Toggles native fullscreen/maximize on the current frontmost window.', { type: 'object', properties: {} }),
-  tool('open_trading_setup', "Sets up the user's trading workspace across monitors (TradingView + Discord + Tradovate). Windows only.", { type: 'object', properties: {} }),
-  tool('start_hand_tracking', "Turns on the webcam and tracks the user's hand as a real cursor (pinch to click).", { type: 'object', properties: {} }),
-  tool('stop_hand_tracking', 'Turns off hand tracking and releases the webcam.', { type: 'object', properties: {} }),
-  tool('create_agent', 'Create a new companion or bot agent for the user.', {
-    type: 'object',
-    properties: {
-      name: { type: 'string' },
-      type: { type: 'string', enum: ['companion', 'bot'] },
-      description: { type: 'string' }
-    },
-    required: ['name']
-  }),
-  tool('list_agents', 'Lists every agent that currently exists.', { type: 'object', properties: {} }),
-  tool('remember_fact', 'Saves a fact for later — permanent memory.', {
-    type: 'object',
-    properties: { fact: { type: 'string' } },
-    required: ['fact']
-  }),
-  tool('move_mouse', 'Moves the mouse to a pixel position on screen (from the screenshot you were given) without clicking.', {
+  tool('list_agents', 'Lists existing agents.', { type: 'object', properties: {} }),
+  tool('remember_fact', 'Saves a fact to permanent memory.', { type: 'object', properties: { fact: { type: 'string' } }, required: ['fact'] }),
+  tool('move_mouse', 'Moves the mouse to a pixel position, no click.', {
     type: 'object',
     properties: { x: { type: 'number' }, y: { type: 'number' }, speed: SPEED_ENUM },
     required: ['x', 'y']
   }),
-  tool('click_mouse', 'Moves to and clicks a pixel position on screen. Last resort — prefer browser_click/click_element first.', {
+  tool('click_mouse', 'Clicks a pixel position. Last resort vs. browser_click/click_element.', {
     type: 'object',
     properties: { x: { type: 'number' }, y: { type: 'number' }, button: BUTTON_ENUM, double: { type: 'boolean' }, speed: SPEED_ENUM },
     required: ['x', 'y']
   }),
-  tool('drag_mouse', 'A real press-move-release drag gesture.', {
-    type: 'object',
-    properties: { fromX: { type: 'number' }, fromY: { type: 'number' }, toX: { type: 'number' }, toY: { type: 'number' }, speed: SPEED_ENUM },
-    required: ['fromX', 'fromY', 'toX', 'toY']
-  }),
-  tool('click_price_level', 'Clicks/right-clicks an EXACT price on a trading chart — reads the real price scale instead of guessing a coordinate. Always use this over click_mouse for anything price-specific.', {
-    type: 'object',
-    properties: { price: { type: 'number' }, button: { type: 'string', enum: ['left', 'right'] }, x: { type: 'number' } },
-    required: ['price']
-  }),
-  tool('browser_open', "Opens a URL in DALVE's own dedicated automation browser — real DOM control, not coordinate guessing. Strongly prefer this for anything web-based.", {
-    type: 'object',
-    properties: { url: { type: 'string' } },
-    required: ['url']
-  }),
-  tool('browser_click', 'Clicks a real element in the automation browser by its actual visible text/label.', {
-    type: 'object',
-    properties: { description: { type: 'string' } },
-    required: ['description']
-  }),
-  tool('browser_type', 'Clicks a field in the automation browser by label/placeholder then types into it.', {
+  tool('browser_open', "Opens a URL in DALVE's own automation browser (real DOM control).", { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] }),
+  tool('browser_click', 'Clicks an element in the automation browser by visible text.', { type: 'object', properties: { description: { type: 'string' } }, required: ['description'] }),
+  tool('browser_type', 'Clicks a field by label then types into it (automation browser).', {
     type: 'object',
     properties: { fieldDescription: { type: 'string' }, text: { type: 'string' }, pressEnter: { type: 'boolean' } },
     required: ['fieldDescription', 'text']
   }),
-  tool('browser_read_text', 'Real visible text of the automation browser page right now.', { type: 'object', properties: {} }),
-  tool('browser_press_key', 'Presses a key in the automation browser.', {
-    type: 'object',
-    properties: { key: { type: 'string' } },
-    required: ['key']
-  }),
-  tool('find_elements', 'Lists every real accessible UI element currently on screen (native desktop apps).', { type: 'object', properties: {} }),
-  tool('click_element', 'Clicks something in a native desktop app by its real OS accessibility name (falls back to OCR).', {
+  tool('browser_read_text', 'Real visible text of the automation browser page.', { type: 'object', properties: {} }),
+  tool('browser_press_key', 'Presses a key in the automation browser.', { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] }),
+  tool('find_elements', 'Lists accessible UI elements on screen (native apps).', { type: 'object', properties: {} }),
+  tool('click_element', 'Clicks a native-app element by accessibility name (OCR fallback).', {
     type: 'object',
     properties: { name: { type: 'string' }, button: BUTTON_ENUM, double: { type: 'boolean' }, speed: SPEED_ENUM },
     required: ['name']
   }),
-  tool('read_screen_text', 'Real OCR text of everything currently visible on screen.', { type: 'object', properties: {} }),
+  tool('read_screen_text', 'Real OCR text of everything on screen.', { type: 'object', properties: {} }),
   tool('click_text', 'Clicks text found via OCR anywhere on screen.', {
     type: 'object',
     properties: { text: { type: 'string' }, button: BUTTON_ENUM, double: { type: 'boolean' }, speed: SPEED_ENUM },
     required: ['text']
   }),
-  tool('define_grid', "Registers a non-web grid/board's pixel boundary (chess, spreadsheets) so click_grid_cell can click exact cells.", {
-    type: 'object',
-    properties: {
-      label: { type: 'string' },
-      x: { type: 'number' },
-      y: { type: 'number' },
-      width: { type: 'number' },
-      height: { type: 'number' },
-      rows: { type: 'number' },
-      cols: { type: 'number' }
-    },
-    required: ['label', 'x', 'y', 'width', 'height', 'rows', 'cols']
-  }),
-  tool('click_grid_cell', 'Clicks one exact cell of a previously-defined grid by row/col.', {
-    type: 'object',
-    properties: { label: { type: 'string' }, row: { type: 'number' }, col: { type: 'number' }, button: BUTTON_ENUM, double: { type: 'boolean' }, speed: SPEED_ENUM },
-    required: ['label', 'row', 'col']
-  }),
-  tool('type_text', 'Types literal text at the current OS-level focus.', {
-    type: 'object',
-    properties: { text: { type: 'string' } },
-    required: ['text']
-  }),
-  tool('press_key', 'Presses a single OS-level key, optionally with modifiers.', {
+  tool('type_text', 'Types literal text at the current focus.', { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] }),
+  tool('press_key', 'Presses one OS key, optionally with modifiers.', {
     type: 'object',
     properties: { key: { type: 'string' }, modifiers: { type: 'array', items: { type: 'string' } } },
     required: ['key']
   }),
-  tool('scroll', 'Scrolls at the current mouse position.', {
-    type: 'object',
-    properties: { deltaX: { type: 'number' }, deltaY: { type: 'number' } }
-  }),
-  tool('take_screenshot', "Saves a real screenshot of the user's screen as a PNG file they can open later — distinct from the automatic vision context DALVE already sees every turn.", { type: 'object', properties: {} }),
-  tool('undo_last_typed_text', "Sends the active app's own undo (Ctrl+Z) to revert the last text DALVE typed. Only works immediately after typing, before a click/drag/Enter/send happened since — honestly refuses otherwise rather than pretending a click or sent message can be undone this way.", { type: 'object', properties: {} }),
-  tool('start_recording_skill', "Starts recording every action DALVE takes from now on, until stop_recording_skill is called. Use when the user asks to teach/show DALVE how to do something so it can repeat it later — they'll walk through the steps live by voice as usual.", { type: 'object', properties: {} }),
-  tool('stop_recording_skill', 'Stops recording and saves everything done since start_recording_skill as a named, replayable skill.', { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] }),
-  tool('run_skill', 'Replays a previously recorded skill by name, step by step.', { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] }),
-  tool('list_skills', 'Lists every recorded skill by name.', { type: 'object', properties: {} }),
-  tool('create_reminder', 'Schedules a reminder or recurring action for a future time, shown on the Calendar tab. Compute dueAtIso yourself as a real ISO 8601 datetime from what the user said, using the current date/time given to you each turn. type "reminder" just notifies at the time; type "message" actually performs `instruction` when due (e.g. "Send Ali on WhatsApp: don\'t forget the meeting").', {
+  tool('scroll', 'Scrolls at the current mouse position.', { type: 'object', properties: { deltaX: { type: 'number' }, deltaY: { type: 'number' } } }),
+  tool('take_screenshot', 'Saves a real screenshot as a PNG file the user can open later.', { type: 'object', properties: {} }),
+  // Skills recording (start/stop/run/list), grid targeting (define_grid/click_grid_cell), trading
+  // tools (open_trading_setup/click_price_level), hand-tracking start/stop, drag_mouse, and
+  // undo_last_typed_text are cut from Groq's tool list to fit the budget above — all still fully
+  // available on Gemini Live.
+  tool('create_reminder', 'Schedules a reminder/message. Compute dueAtIso as real ISO 8601 from the given current date/time. type "message" performs `instruction` when due.', {
     type: 'object',
     properties: {
       title: { type: 'string' },
-      dueAtIso: { type: 'string', description: 'ISO 8601 datetime, e.g. 2026-08-29T15:00:00' },
+      dueAtIso: { type: 'string' },
       recurrence: { type: 'string', enum: ['none', 'daily', 'weekdays', 'weekly', 'monthly'] },
       type: { type: 'string', enum: ['reminder', 'message'] },
-      instruction: { type: 'string', description: 'Required for type "message" — the action to perform when due.' }
+      instruction: { type: 'string' }
     },
     required: ['title', 'dueAtIso', 'recurrence', 'type']
   }),
-  tool('list_reminders', 'Lists every upcoming reminder and scheduled message.', { type: 'object', properties: {} }),
-  tool('cancel_reminder', 'Cancels a reminder or scheduled message by its exact title.', { type: 'object', properties: { title: { type: 'string' } }, required: ['title'] }),
-  tool('list_common_folders', "Returns the user's real Home/Desktop/Documents/Downloads/Pictures folder paths — use this to build real file paths instead of guessing them.", { type: 'object', properties: {} }),
-  tool('list_directory', 'Lists files and subfolders in a real directory path.', { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] }),
-  tool('read_text_file', 'Reads a plain text/code/markdown/csv/json file. For PDFs or images use read_document instead.', { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] }),
-  tool('write_text_file', 'Writes (or appends to) a plain text file, creating it if it does not exist.', {
+  tool('list_common_folders', "Returns the user's real Home/Desktop/Documents/Downloads/Pictures paths.", { type: 'object', properties: {} }),
+  tool('write_text_file', 'Writes/appends a plain text file.', {
     type: 'object',
     properties: { path: { type: 'string' }, content: { type: 'string' }, append: { type: 'boolean' } },
     required: ['path', 'content']
   }),
-  tool('delete_file', 'Moves a file to the Recycle Bin (recoverable, not a permanent delete).', { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] }),
-  tool('move_file', 'Moves or renames a file from one path to another.', { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' } }, required: ['from', 'to'] }),
-  tool('search_files', 'Searches for files by (partial, case-insensitive) filename under a directory, recursively.', { type: 'object', properties: { directory: { type: 'string' }, query: { type: 'string' } }, required: ['directory', 'query'] }),
-  tool('read_document', 'Reads a document by real file path — text/code/markdown/csv/json directly, PDFs via real text extraction, images attached as vision content for you to actually see. .docx and other office formats are not supported yet.', { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] }),
-  tool('read_clipboard', "Reads the current text on the user's OS clipboard.", { type: 'object', properties: {} }),
-  tool('write_clipboard', "Sets the user's OS clipboard to the given text.", { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] }),
-  tool('start_autonomous_task', 'Hands off a task to a background loop that keeps watching the screen and acting even after this conversation ends.', {
-    type: 'object',
-    properties: { goal: { type: 'string' } },
-    required: ['goal']
-  }),
+  tool('read_document', 'Reads a file by path — text/code/csv/json directly, PDFs via text extraction, images as vision content. No .docx yet.', { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] }),
+  tool('read_clipboard', "Reads the user's OS clipboard text.", { type: 'object', properties: {} }),
+  tool('write_clipboard', "Sets the user's OS clipboard text.", { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] }),
+  tool('start_autonomous_task', 'Background loop that keeps acting after this conversation ends.', { type: 'object', properties: { goal: { type: 'string' } }, required: ['goal'] }),
   tool('stop_autonomous_task', 'Stops the background autonomous task.', { type: 'object', properties: {} })
 ]
 
