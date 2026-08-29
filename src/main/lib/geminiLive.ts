@@ -17,6 +17,7 @@ import * as appControl from './appControl'
 import * as windowLayout from './windowLayout'
 import * as priceAxis from './priceAxis'
 import * as handTracking from './handTracking'
+import * as arObjects from './arObjects'
 import * as mcpClient from './mcpClient'
 import { skillsStore as skillsDb, isRecording, startRecording, stopRecording, recordStep, SKILL_META_TOOLS } from './skillsStore'
 import { createReminderTool, listRemindersTool, cancelReminderTool } from './scheduleStore'
@@ -267,6 +268,24 @@ const START_HAND_TRACKING_TOOL: FunctionDeclaration = {
 const STOP_HAND_TRACKING_TOOL: FunctionDeclaration = {
   name: 'stop_hand_tracking',
   description: 'Turns off hand tracking and releases the webcam.',
+  parametersJsonSchema: { type: 'object', properties: {} }
+}
+
+const SPAWN_AR_OBJECT_TOOL: FunctionDeclaration = {
+  name: 'spawn_ar_object',
+  description:
+    'Places a manipulable 3D object into the live hand-tracking camera feed — e.g. "put a microwave here". The user can grab and move it with a thumb+index pinch, pull its handle to open a door, press its buttons, pinch thumb+middle and drag to rotate it, or hold a 3-finger pinch and spread to resize it. Requires hand tracking to be on (call start_hand_tracking first if it is not). Only "microwave" exists right now — say so if asked for anything else.',
+  parametersJsonSchema: {
+    type: 'object',
+    properties: {
+      object_type: { type: 'string', description: 'The object to place. Currently only "microwave" is supported.' }
+    },
+    required: ['object_type']
+  }
+}
+const REMOVE_AR_OBJECT_TOOL: FunctionDeclaration = {
+  name: 'remove_ar_object',
+  description: 'Removes the currently placed 3D object from the camera view.',
   parametersJsonSchema: { type: 'object', properties: {} }
 }
 
@@ -687,6 +706,8 @@ async function buildToolsForAgent(agent: AgentConfig | null): Promise<Tool[]> {
     OPEN_TRADING_SETUP_TOOL,
     START_HAND_TRACKING_TOOL,
     STOP_HAND_TRACKING_TOOL,
+    SPAWN_AR_OBJECT_TOOL,
+    REMOVE_AR_OBJECT_TOOL,
     TAKE_SCREENSHOT_TOOL,
     UNDO_LAST_TYPED_TEXT_TOOL,
     START_RECORDING_SKILL_TOOL,
@@ -1072,6 +1093,12 @@ async function handleToolCalls(functionCalls: FunctionCall[]): Promise<void> {
         response = { status, result: message }
       } else if (fc.name === 'stop_hand_tracking') {
         const { status, message } = handTracking.stop()
+        response = { status, result: message }
+      } else if (fc.name === 'spawn_ar_object') {
+        const { status, message } = arObjects.spawn(String(args.object_type ?? ''))
+        response = { status, result: message }
+      } else if (fc.name === 'remove_ar_object') {
+        const { status, message } = arObjects.clear()
         response = { status, result: message }
       } else if (fc.name === 'take_screenshot') {
         const { status, path, message } = await screenControl.saveScreenshot()

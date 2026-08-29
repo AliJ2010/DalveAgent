@@ -1,21 +1,45 @@
 import { useEffect, useRef, useState } from 'react'
 import { HandLandmarker, FilesetResolver, type NormalizedLandmark } from '@mediapipe/tasks-vision'
-import { Hand, Square, Maximize2 } from 'lucide-react'
+import { Hand, Square, Move } from 'lucide-react'
+import { SpatialEngine, type ArObjectType } from '../spatial/spatialEngine'
 
-// Real pixel dimensions of the preview canvas, not just its on-screen CSS size — drawing at a
-// higher resolution for a bigger preview keeps it sharp instead of upscaling a small blurry
-// buffer. Four steps (not just small/large) per direct request for more control over sizing.
-const PREVIEW_SIZES = [
-  { label: 'S', width: 240, height: 180 },
-  { label: 'M', width: 360, height: 270 },
-  { label: 'L', width: 480, height: 360 },
-  { label: 'XL', width: 640, height: 480 }
-] as const
-const PREVIEW_SIZE_KEY = 'dalve-hand-tracking-preview-size'
+// Free-form panel geometry, not a fixed size-cycle — per direct request to "grow the camera as
+// much as I want and move it and put it where I want". The canvas's internal draw resolution stays
+// fixed (see CAPTURE_*) so the video/skeleton stay sharp; only the on-screen CSS box scales, the
+// same way a <video> or <img> scales independent of its source resolution.
+const CAPTURE_WIDTH = 640
+const CAPTURE_HEIGHT = 480
+const MIN_PANEL_WIDTH = 220
+const MIN_PANEL_HEIGHT = 165
+const MAX_PANEL_WIDTH = 1000
+const MAX_PANEL_HEIGHT = 750
+const DEFAULT_PANEL = { left: 20, top: 20, width: 360, height: 270 }
+const PANEL_GEOMETRY_KEY = 'dalve-hand-tracking-panel-v2'
 
-function loadSavedSizeIndex(): number {
-  const raw = Number(localStorage.getItem(PREVIEW_SIZE_KEY))
-  return Number.isInteger(raw) && raw >= 0 && raw < PREVIEW_SIZES.length ? raw : 0
+interface PanelGeometry {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
+function loadPanelGeometry(): PanelGeometry {
+  try {
+    const raw = localStorage.getItem(PANEL_GEOMETRY_KEY)
+    if (!raw) return DEFAULT_PANEL
+    const parsed = JSON.parse(raw) as Partial<PanelGeometry>
+    if (
+      typeof parsed.left === 'number' &&
+      typeof parsed.top === 'number' &&
+      typeof parsed.width === 'number' &&
+      typeof parsed.height === 'number'
+    ) {
+      return parsed as PanelGeometry
+    }
+  } catch {
+    // fall through to default
+  }
+  return DEFAULT_PANEL
 }
 
 // Pinned to the exact installed @mediapipe/tasks-vision version — jsdelivr serves each version
@@ -48,34 +72,116 @@ function computeSpread(hand: NormalizedLandmark[]): number {
 }
 
 /**
- * Webcam hand-tracking cursor — invisible until turned on by voice, then shows a small live
- * camera preview with the tracked hand's skeleton drawn over it (purely for the user to see what
- * DALVE sees; all actual cursor/click/zoom decisions happen in the main process from the raw
- * per-frame geometry this sends over IPC). Camera capture and MediaPipe's hand-landmark inference
- * both have to happen here, not in the main process — getUserMedia and WebAssembly vision models
- * are browser-standard APIs with no main-process equivalent in Electron.
+ * Webcam hand-tracking cursor — invisible until turned on by voice, then shows a live camera
+ * preview with the tracked hand's skeleton drawn over it (purely for the user to see what DALVE
+ * sees; all actual cursor/click/zoom decisions happen in the main process from the raw per-frame
+ * geometry this sends over IPC). The same per-frame landmarks also drive an optional spatial AR
+ * layer (see SpatialEngine) that composites a manipulable 3D object on top of this same feed —
+ * one camera + one MediaPipe loop feeding two consumers, not two separate camera pipelines.
+ * Camera capture and MediaPipe inference both have to happen here, not in the main process —
+ * getUserMedia and WebAssembly vision models are browser-standard APIs with no main-process
+ * equivalent in Electron.
  */
 export function HandTrackingController(): React.JSX.Element {
   const [active, setActive] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [sizeIndex, setSizeIndex] = useState(loadSavedSizeIndex)
+  const [panel, setPanel] = useState<PanelGeometry>(loadPanelGeometry)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const spatialContainerRef = useRef<HTMLDivElement | null>(null)
+  const spatialEngineRef = useRef<SpatialEngine | null>(null)
   const landmarkerRef = useRef<HandLandmarker | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const rafRef = useRef<number | null>(null)
   const runningRef = useRef(false)
+  const panelRef = useRef(panel)
+  panelRef.current = panel
 
   useEffect(() => {
     const unsubStart = window.dalve.handTracking.onStart(() => void startTracking())
     const unsubStop = window.dalve.handTracking.onStop(() => stopTracking())
+    const unsubArSpawn = window.dalve.ar.onSpawn((type) => {
+      spatialEngineRef.current?.spawn(type as ArObjectType)
+    })
+    const unsubArClear = window.dalve.ar.onClear(() => {
+      spatialEngineRef.current?.clear()
+    })
     return () => {
       unsubStart()
       unsubStop()
+      unsubArSpawn()
+      unsubArClear()
       stopTracking()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // The spatial engine mounts once and lives for the component's whole lifetime (not just while
+  // tracking is active) so a spawn arriving right as tracking starts never races an engine that
+  // doesn't exist yet.
+  useEffect(() => {
+    const container = spatialContainerRef.current
+    if (!container) return
+    const engine = new SpatialEngine(container)
+    spatialEngineRef.current = engine
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0]
+      if (!entry) return
+      engine.resize(entry.contentRect.width, entry.contentRect.height)
+    })
+    observer.observe(container)
+    return () => {
+      observer.disconnect()
+      engine.dispose()
+      spatialEngineRef.current = null
+    }
+  }, [])
+
+  function persistPanel(next: PanelGeometry): void {
+    setPanel(next)
+    try {
+      localStorage.setItem(PANEL_GEOMETRY_KEY, JSON.stringify(next))
+    } catch {
+      // best-effort only
+    }
+  }
+
+  function startDrag(e: React.PointerEvent): void {
+    e.preventDefault()
+    const start = { x: e.clientX, y: e.clientY, ...panelRef.current }
+    function onMove(ev: PointerEvent): void {
+      const dx = ev.clientX - start.x
+      const dy = ev.clientY - start.y
+      const left = Math.min(Math.max(0, start.left + dx), window.innerWidth - 80)
+      const top = Math.min(Math.max(0, start.top + dy), window.innerHeight - 40)
+      persistPanel({ ...panelRef.current, left, top })
+    }
+    function onUp(): void {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }
+
+  function startResize(e: React.PointerEvent): void {
+    e.preventDefault()
+    e.stopPropagation()
+    const start = { x: e.clientX, y: e.clientY, ...panelRef.current }
+    function onMove(ev: PointerEvent): void {
+      const dx = ev.clientX - start.x
+      const dy = ev.clientY - start.y
+      const width = Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, start.width + dx))
+      const height = Math.min(MAX_PANEL_HEIGHT, Math.max(MIN_PANEL_HEIGHT, start.height + dy))
+      persistPanel({ ...panelRef.current, width, height })
+    }
+    function onUp(): void {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }
 
   async function ensureLandmarker(): Promise<HandLandmarker> {
     if (landmarkerRef.current) return landmarkerRef.current
@@ -92,7 +198,9 @@ export function HandTrackingController(): React.JSX.Element {
   async function startTracking(): Promise<void> {
     setError(null)
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } })
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: CAPTURE_WIDTH, height: CAPTURE_HEIGHT }
+      })
       streamRef.current = stream
       const video = videoRef.current
       if (!video) throw new Error('No video element to attach the camera to.')
@@ -118,8 +226,9 @@ export function HandTrackingController(): React.JSX.Element {
 
     ctx.save()
     // Mirror the whole draw so the preview reads like looking in a mirror — matching the same
-    // mirrored convention the actual cursor-mapping in the main process uses, so what the user
-    // sees here lines up with how their hand actually controls the cursor.
+    // mirrored convention the actual cursor-mapping in the main process (and the spatial engine's
+    // hand-to-world mapping) uses, so what the user sees here lines up with how their hand
+    // controls the cursor and any placed 3D object.
     ctx.translate(canvas.width, 0)
     ctx.scale(-1, 1)
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
@@ -158,19 +267,22 @@ export function HandTrackingController(): React.JSX.Element {
         const hand = result.landmarks[0]
         let pinchIndex = 1
         let pinchMiddle = 1
+        let spread = 0
         if (hand) {
           pinchIndex = dist(hand[THUMB_TIP], hand[INDEX_TIP])
           pinchMiddle = dist(hand[THUMB_TIP], hand[MIDDLE_TIP])
+          spread = computeSpread(hand)
           window.dalve.handTracking.sendFrame({
             indexX: hand[INDEX_TIP].x,
             indexY: hand[INDEX_TIP].y,
             thumbIndexDist: pinchIndex,
             thumbMiddleDist: pinchMiddle,
             indexMiddleDist: dist(hand[INDEX_TIP], hand[MIDDLE_TIP]),
-            spread: computeSpread(hand),
+            spread,
             palmY: hand[WRIST].y
           })
         }
+        spatialEngineRef.current?.updateHand({ hand, pinchIndex, pinchMiddle, spread })
         drawPreview(hand, video, pinchIndex, pinchMiddle)
       }
       rafRef.current = requestAnimationFrame(detect)
@@ -237,58 +349,69 @@ export function HandTrackingController(): React.JSX.Element {
           )}
         </div>
       )}
-      {active && (
+      {/* Always mounted (not just while `active`) so the spatial engine underneath is alive and
+          ready the instant tracking starts, but visually hidden until then. */}
+      <div
+        style={{
+          position: 'fixed',
+          left: panel.left,
+          top: panel.top,
+          width: panel.width,
+          height: panel.height,
+          zIndex: 99,
+          borderRadius: 12,
+          overflow: 'hidden',
+          border: '1px solid var(--c-gold)',
+          boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+          display: active ? 'block' : 'none'
+        }}
+      >
+        <canvas
+          ref={canvasRef}
+          width={CAPTURE_WIDTH}
+          height={CAPTURE_HEIGHT}
+          style={{ display: 'block', width: '100%', height: '100%' }}
+        />
+        {/* Transparent WebGL overlay for any placed 3D object, composited over the same mirrored
+            video frame the 2D canvas above just drew — pointer-events stay off so it never
+            intercepts drag/resize handling on the panel underneath it. */}
         <div
+          ref={spatialContainerRef}
+          style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
+        />
+        <div
+          onPointerDown={startDrag}
+          title="Drag to move"
           style={{
-            position: 'fixed',
-            bottom: 20,
-            left: 20,
-            zIndex: 99,
-            borderRadius: 12,
-            overflow: 'hidden',
-            border: '1px solid var(--c-gold)',
-            boxShadow: '0 8px 24px rgba(0,0,0,0.4)'
+            position: 'absolute',
+            top: 6,
+            left: 6,
+            display: 'flex',
+            alignItems: 'center',
+            padding: 4,
+            borderRadius: 6,
+            background: 'rgba(0,0,0,0.5)',
+            color: 'var(--c-gold-bright)',
+            cursor: 'move'
           }}
         >
-          <canvas
-            ref={canvasRef}
-            width={PREVIEW_SIZES[sizeIndex].width}
-            height={PREVIEW_SIZES[sizeIndex].height}
-            style={{ display: 'block' }}
-          />
-          <button
-            onClick={() => {
-              const next = (sizeIndex + 1) % PREVIEW_SIZES.length
-              setSizeIndex(next)
-              try {
-                localStorage.setItem(PREVIEW_SIZE_KEY, String(next))
-              } catch {
-                // best-effort only
-              }
-            }}
-            title={`Preview size: ${PREVIEW_SIZES[sizeIndex].label} — click to cycle`}
-            style={{
-              position: 'absolute',
-              top: 6,
-              right: 6,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 4,
-              padding: '3px 8px',
-              borderRadius: 6,
-              border: '1px solid rgba(212,175,55,0.5)',
-              background: 'rgba(0,0,0,0.5)',
-              color: 'var(--c-gold-bright)',
-              cursor: 'pointer',
-              fontSize: 10,
-              fontWeight: 600
-            }}
-          >
-            <Maximize2 size={12} />
-            {PREVIEW_SIZES[sizeIndex].label}
-          </button>
+          <Move size={12} />
         </div>
-      )}
+        <div
+          onPointerDown={startResize}
+          title="Drag to resize"
+          style={{
+            position: 'absolute',
+            bottom: 0,
+            right: 0,
+            width: 18,
+            height: 18,
+            cursor: 'nwse-resize',
+            background:
+              'linear-gradient(135deg, transparent 50%, rgba(212,175,55,0.6) 50%, rgba(212,175,55,0.6) 65%, transparent 65%, transparent 80%, rgba(212,175,55,0.6) 80%)'
+          }}
+        />
+      </div>
     </>
   )
 }

@@ -11,6 +11,7 @@ import * as screenControl from '../lib/screenControl'
 import * as autonomousTask from '../lib/autonomousTask'
 import * as cloudSync from '../lib/cloudSync'
 import * as handTracking from '../lib/handTracking'
+import * as arObjects from '../lib/arObjects'
 import * as mcpClient from '../lib/mcpClient'
 import { scheduleStore } from '../lib/scheduleStore'
 import type { AgentConfig, BuiltinWakeWord, DalveTone, HandFrame, ScheduleItem, ScheduleRecurrence } from '@shared/types'
@@ -354,6 +355,9 @@ export function registerIpcHandlers(): void {
   ipcMain.on('handTracking:frame', (_e, frame: HandFrame) => {
     handTracking.onFrame(frame)
   })
+
+  // --- Spatial AR objects ---
+  ipcMain.handle('ar:clear', () => arObjects.clear())
 
   // --- Autonomous task ---
   ipcMain.handle('autonomousTask:stop', () => autonomousTask.stopAutonomousTask('stopped by user'))

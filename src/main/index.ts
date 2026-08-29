@@ -26,6 +26,7 @@ import { attachWindow as attachAutonomousTaskWindow, stopAutonomousTask } from '
 import { attachWindow as attachAgentStoreWindow } from './lib/agentStore'
 import { attachWindow as attachSettingsStoreWindow } from './lib/settingsStore'
 import { attachWindow as attachHandTrackingWindow, stop as stopHandTracking } from './lib/handTracking'
+import { attachWindow as attachArObjectsWindow } from './lib/arObjects'
 import { attachWindow as attachSkillsStoreWindow } from './lib/skillsStore'
 import { attachWindow as attachScheduleStoreWindow } from './lib/scheduleStore'
 import { startScheduler } from './lib/scheduler'
@@ -180,6 +181,7 @@ function createWindow(): void {
   attachAgentStoreWindow(mainWindow)
   attachSettingsStoreWindow(mainWindow)
   attachHandTrackingWindow(mainWindow)
+  attachArObjectsWindow(mainWindow)
   attachSkillsStoreWindow(mainWindow)
   attachScheduleStoreWindow(mainWindow)
 

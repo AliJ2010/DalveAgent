@@ -200,6 +200,19 @@ const dalveApi = {
       return () => ipcRenderer.removeListener('handTracking:stop', listener)
     }
   },
+  ar: {
+    clear: (): Promise<{ status: 'SUCCESS'; message: string }> => ipcRenderer.invoke('ar:clear'),
+    onSpawn: (callback: (type: string) => void): (() => void) => {
+      const listener = (_e: Electron.IpcRendererEvent, type: string): void => callback(type)
+      ipcRenderer.on('ar:spawn', listener)
+      return () => ipcRenderer.removeListener('ar:spawn', listener)
+    },
+    onClear: (callback: () => void): (() => void) => {
+      const listener = (): void => callback()
+      ipcRenderer.on('ar:clear', listener)
+      return () => ipcRenderer.removeListener('ar:clear', listener)
+    }
+  },
   cloud: {
     isConfigured: (): Promise<boolean> => ipcRenderer.invoke('cloud:isConfigured'),
     getSession: (): Promise<{ signedIn: boolean; email?: string }> => ipcRenderer.invoke('cloud:getSession'),
