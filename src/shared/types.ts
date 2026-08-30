@@ -15,8 +15,9 @@ export interface AgentConfig {
   toolScope: string[] // Composio action ids / MCP tool ids this agent may use
   memory: string // persistent free-text notes, scoped to this agent
   voice: string // Gemini Live voice name
-  /** Per-agent override for the Groq+ElevenLabs engine — undefined means "use the global default
-   *  voice from Settings" rather than every agent sounding identical under that engine. */
+  /** Per-agent override for the turn-based (non-live) engine's ElevenLabs voice — undefined means
+   *  "use the global default voice from Settings" rather than every agent sounding identical
+   *  under that engine. */
   elevenLabsVoiceId?: string
   elevenLabsVoiceName?: string
   status: AgentStatus
@@ -83,6 +84,15 @@ export interface McpServerConfig {
   tools: string[]
 }
 
+// 'gemini' is the true bidirectional Live session (geminiLive.ts). 'geminiTurns' is a turn-based
+// cascade on the SAME Gemini API key — record an utterance, transcribe + reason + call tools via
+// ai.models.generateContent, speak the reply via ElevenLabs (geminiTurnVoice.ts) — kept as a
+// distinct engine rather than folded into geminiLive.ts because it has fundamentally different
+// session mechanics (no continuous stream, its own VAD/barge-in), the same reasoning that used to
+// separate the old Groq-backed engine. Replaced Groq entirely (real reported failure: it "refuses
+// to work") — this reuses the Gemini key already configured for Live, no separate credential.
+export type VoiceEngine = 'gemini' | 'geminiTurns'
+
 export interface SettingsState {
   geminiApiKeySet: boolean
   anthropicApiKeySet: boolean
@@ -93,14 +103,13 @@ export interface SettingsState {
   dalveMemory: string
   telegramBotTokenSet: boolean
   telegramChatBound: boolean
-  groqApiKeySet: boolean
   elevenLabsApiKeySet: boolean
   elevenLabsVoiceId?: string
   elevenLabsVoiceName?: string
   /** Voices added by hand (e.g. a shared/library voice ElevenLabs' own API won't list under this
    *  account) so they still show up as pickable options alongside the ones fetched from /v2/voices. */
   elevenLabsCustomVoices: { voiceId: string; name: string }[]
-  voiceEngine: 'gemini' | 'groq'
+  voiceEngine: VoiceEngine
   dalveTone: DalveTone
   picovoiceAccessKeySet: boolean
   wakeWordEnabled: boolean
@@ -242,7 +251,9 @@ export type ArPartRole = 'body' | 'handle' | 'button' | 'door' | 'static'
 export interface ArBlueprintPart {
   id: string
   shape: ArShape
-  /** box: [width, height, depth]. cylinder: [radiusTop, radiusBottom, height]. sphere: [radius, radius, radius]. */
+  /** box: [width, height, depth]. cylinder: [radiusTop, radiusBottom, height]. sphere: [radiusX,
+   *  radiusY, radiusZ] — the three axes can differ, stretching/squashing it into an ellipsoid
+   *  (an egg, a flattened spoon head, a squashed lid), not just a uniform ball. */
   size: [number, number, number]
   /** Local position relative to the parent (or the object's own origin, if no parent). For a
    *  'door' part this is where its hinge axis sits, not its visual center — see hingeOffset. */

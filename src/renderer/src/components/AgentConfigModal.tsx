@@ -389,7 +389,7 @@ export function AgentConfigModal(): React.JSX.Element | null {
 
               <div>
                 <div className="tracked-label" style={{ color: 'var(--c-gold)', marginBottom: 8 }}>
-                  Groq + ElevenLabs voice
+                  Gemini (Turn-Based) voice
                 </div>
                 {settings?.elevenLabsApiKeySet ? (
                   <select
@@ -428,7 +428,7 @@ export function AgentConfigModal(): React.JSX.Element | null {
                   </p>
                 )}
                 <p style={{ fontSize: 12, color: 'var(--c-text-3)', marginTop: 10 }}>
-                  Used instead of the global default while the voice engine is set to Groq.
+                  Used instead of the global default while the voice engine is set to Gemini (Turn-Based).
                 </p>
               </div>
             </div>

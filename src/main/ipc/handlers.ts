@@ -5,7 +5,7 @@ import { settingsStore } from '../lib/settingsStore'
 import { agentStore } from '../lib/agentStore'
 import { generateAgentFromPrompt } from '../lib/agentGenerator'
 import * as geminiLive from '../lib/geminiLive'
-import * as groqVoice from '../lib/groqVoice'
+import * as geminiTurnVoice from '../lib/geminiTurnVoice'
 import * as composio from '../lib/composio'
 import * as screenControl from '../lib/screenControl'
 import * as autonomousTask from '../lib/autonomousTask'
@@ -14,7 +14,7 @@ import * as handTracking from '../lib/handTracking'
 import * as arObjects from '../lib/arObjects'
 import * as mcpClient from '../lib/mcpClient'
 import { scheduleStore } from '../lib/scheduleStore'
-import type { AgentConfig, BuiltinWakeWord, DalveTone, HandFrame, ScheduleItem, ScheduleRecurrence } from '@shared/types'
+import type { AgentConfig, BuiltinWakeWord, DalveTone, HandFrame, ScheduleItem, ScheduleRecurrence, VoiceEngine } from '@shared/types'
 
 export function registerIpcHandlers(): void {
   // Lets the UI show the real running version, e.g. to confirm an auto-update actually landed
@@ -54,11 +54,6 @@ export function registerIpcHandlers(): void {
     return settingsStore.getState()
   })
 
-  ipcMain.handle('settings:setGroqKey', (_e, key: string) => {
-    settingsStore.setGroqApiKey(key)
-    return settingsStore.getState()
-  })
-
   ipcMain.handle('settings:setElevenLabsKey', (_e, key: string) => {
     settingsStore.setElevenLabsApiKey(key)
     return settingsStore.getState()
@@ -69,7 +64,7 @@ export function registerIpcHandlers(): void {
     return settingsStore.getState()
   })
 
-  ipcMain.handle('settings:setVoiceEngine', (_e, engine: 'gemini' | 'groq') => {
+  ipcMain.handle('settings:setVoiceEngine', (_e, engine: VoiceEngine) => {
     settingsStore.setVoiceEngine(engine)
     return settingsStore.getState()
   })
@@ -313,13 +308,13 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('schedule:remove', (_e, id: string) => scheduleStore.remove(id))
 
-  // --- Voice (Gemini Live, or Groq+ElevenLabs — see settingsStore.voiceEngine) ---
+  // --- Voice (Gemini Live, or the turn-based Gemini+ElevenLabs cascade — see settingsStore.voiceEngine) ---
   // Kept as two full, independent engines rather than one merged with branches throughout —
-  // Gemini Live is a true bidirectional streaming session or none at all, while the Groq engine
-  // is a record/transcribe/reason/synthesize cascade with its own VAD; forcing one code path to
-  // cover both would leak one engine's assumptions into the other everywhere.
-  function activeEngine(): typeof geminiLive | typeof groqVoice {
-    return settingsStore.getVoiceEngine() === 'groq' ? groqVoice : geminiLive
+  // Gemini Live is a true bidirectional streaming session or none at all, while the turn-based
+  // engine is a record/transcribe/reason/synthesize cascade with its own VAD; forcing one code
+  // path to cover both would leak one engine's assumptions into the other everywhere.
+  function activeEngine(): typeof geminiLive | typeof geminiTurnVoice {
+    return settingsStore.getVoiceEngine() === 'geminiTurns' ? geminiTurnVoice : geminiLive
   }
 
   ipcMain.handle('voice:start', async (_e, agentId?: string | null) => {

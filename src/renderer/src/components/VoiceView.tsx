@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import { ParticleOrb } from './ParticleOrb'
-import type { OrbState } from '../particles/particleOrbEngine'
+import { useEffect, useState } from 'react'
+import { ParticleSphere } from './ParticleSphere'
 import { BackgroundSpheres } from './BackgroundSpheres'
 import { AgentSwitcher } from './AgentSwitcher'
 import { useVoiceStore } from '../state/voiceStore'
@@ -10,10 +9,10 @@ import { hexToRgbString } from '../lib/color'
 import { formatActionLabel } from '../lib/formatLabel'
 
 const TOPBAR_HEIGHT = 48
-// A real tool call or autonomous task already forces the orb into its full-screen unbound
-// "explosion" — this adds a purely ambient, unpredictable version of the same thing so the orb
-// doesn't ONLY ever explode when something is happening, per direct feedback. Random within a
-// wide window so it never reads as a fixed interval.
+// A tool call or autonomous task already puts the sphere into its "busy" scattered look — this
+// adds a purely ambient, unpredictable version of the same thing so it doesn't ONLY ever happen
+// when something is actively running, per direct feedback. Random within a wide window so it
+// never reads as a fixed interval.
 const RANDOM_BURST_MIN_DELAY_MS = 18_000
 const RANDOM_BURST_MAX_DELAY_MS = 55_000
 const RANDOM_BURST_MIN_DURATION_MS = 2_500
@@ -52,16 +51,6 @@ export function VoiceView(): React.JSX.Element {
       clearTimeout(durationTimer)
     }
   }, [])
-
-  // Any real activity (a tool executing, an autonomous task running unattended) OR a random
-  // ambient burst all drive the SAME full-screen unbound "explosion" — there's no separate boxed-
-  // in "thinking" visual anymore. Direct feedback was that the action-triggered version stayed
-  // confined to a small square instead of actually flying across the screen, and that it should
-  // also happen unpredictably, not just when something is actually running.
-  const orbState: OrbState = useMemo(() => {
-    if (autonomousActive || toolActive || randomBurst) return 'unbound'
-    return sessionState
-  }, [autonomousActive, toolActive, randomBurst, sessionState])
 
   return (
     <div style={{ position: 'relative', flex: 1, overflow: 'hidden' }}>
@@ -104,7 +93,19 @@ export function VoiceView(): React.JSX.Element {
               transformOrigin: 'center'
             }}
           >
-            <ParticleOrb size={240} state={orbState} color={sphereColor} level={audioLevel} />
+            {/* The proven, lag-free Canvas2D sphere — a real GPU/WebGL replacement was tried and
+                reverted after live testing: it lagged and its "explosion" either stayed confined
+                to a small square or, once expanded, was too sparse/dim to visibly register. This
+                keeps the same particle-sphere identity and adds a "busy" scattered look via the
+                same cheap per-point loop instead (see ParticleSphere's `busy` prop). */}
+            <ParticleSphere
+              size={240}
+              state={sessionState}
+              color={sphereColor}
+              pointCount={520}
+              level={audioLevel}
+              busy={autonomousActive || toolActive || randomBurst}
+            />
           </div>
 
           {toolActive && (
@@ -137,12 +138,11 @@ export function VoiceView(): React.JSX.Element {
           )}
         </div>
 
-        {/* A normal flex child with the SAME `gap` as the switcher-to-orb spacing above, not an
-            absolutely-positioned overlay glued to the orb's bottom edge — that overlay's visual
-            gap depended on how much of the orb's own box the sphere actually fills, which shrank
-            along with the box when the orb's size dropped from 360 to 240, reading as "too close"
-            even though the offset itself never changed. This way switcher→orb and orb→label are
-            provably the same distance, not two different gap mechanisms that happen to look close. */}
+        {/* A normal flex child sharing the same `gap` as the switcher-to-orb spacing above, not
+            an absolutely-positioned overlay glued to the orb's bottom edge — that overlay's
+            visual gap depended on how much of the orb's own box the sphere actually fills, which
+            reads as "too close" whenever the box size changes even though the offset itself
+            never did. This way switcher→orb and orb→label are provably the same distance. */}
         <div
           className="tracked-label"
           style={{

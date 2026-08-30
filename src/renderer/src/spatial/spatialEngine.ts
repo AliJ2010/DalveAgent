@@ -43,8 +43,20 @@ interface GrabState {
 function makeGeometry(part: ArBlueprintPart): THREE.BufferGeometry {
   const [a, b, c] = part.size
   if (part.shape === 'cylinder') return new THREE.CylinderGeometry(Math.max(0.001, a), Math.max(0.001, b), Math.max(0.001, c), 24)
-  if (part.shape === 'sphere') return new THREE.SphereGeometry(Math.max(0.001, a), 20, 16)
+  // Always a unit sphere — see applyShapeScale, which stretches it per-axis. THREE.SphereGeometry
+  // only ever takes one radius; building a real egg/spoon-head/squashed-lid shape needs all three
+  // of a part's size components to matter, not just size[0] with the other two silently ignored.
+  if (part.shape === 'sphere') return new THREE.SphereGeometry(1, 20, 16)
   return new THREE.BoxGeometry(Math.max(0.001, a), Math.max(0.001, b), Math.max(0.001, c))
+}
+
+/** A sphere is the one shape whose geometry can't encode 3 independent dimensions on its own
+ *  (box/cylinder already do, via their own constructor args) — this is what turns a unit sphere
+ *  into an ellipsoid matching the part's actual [x,y,z] size. */
+function applyShapeScale(mesh: THREE.Mesh, part: ArBlueprintPart): void {
+  if (part.shape !== 'sphere') return
+  const [a, b, c] = part.size
+  mesh.scale.set(Math.max(0.001, a), Math.max(0.001, b), Math.max(0.001, c))
 }
 
 /**
@@ -83,6 +95,7 @@ function buildFromBlueprint(blueprint: ArBlueprint): THREE.Group {
       )
       mesh.position.set(...(part.hingeOffset ?? [0, 0, 0]))
       mesh.userData.part = 'door'
+      applyShapeScale(mesh, part)
       pivot.add(mesh)
       // Other parts (a handle) that name this door as their parent attach to the PIVOT, not the
       // mesh, so they swing together — a handle keeps its position relative to the hinge axis,
@@ -97,6 +110,7 @@ function buildFromBlueprint(blueprint: ArBlueprint): THREE.Group {
     if (part.role === 'button') {
       mesh.userData.buttonRestZ = part.position[2]
     }
+    applyShapeScale(mesh, part)
     attachNode(part, mesh, parent)
   }
 

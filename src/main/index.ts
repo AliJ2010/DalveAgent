@@ -20,7 +20,7 @@ process.on('unhandledRejection', (reason) => {
   log.error('[main] unhandledRejection (kept the app alive):', reason instanceof Error ? reason.stack : reason)
 })
 import { attachWindow, stopVoiceSession } from './lib/geminiLive'
-import { attachWindow as attachGroqVoiceWindow, stopVoiceSession as stopGroqVoiceSession } from './lib/groqVoice'
+import { attachWindow as attachGeminiTurnVoiceWindow, stopVoiceSession as stopGeminiTurnVoiceSession } from './lib/geminiTurnVoice'
 import { attachWindow as attachScreenControlWindow, stopAll as stopScreenControl } from './lib/screenControl'
 import { attachWindow as attachAutonomousTaskWindow, stopAutonomousTask } from './lib/autonomousTask'
 import { attachWindow as attachAgentStoreWindow } from './lib/agentStore'
@@ -84,7 +84,7 @@ const HOTKEY_MONITOR_INDEX = 2
 function panicShutdown(): void {
   log.info('[main] panic shutdown triggered')
   stopVoiceSession()
-  stopGroqVoiceSession()
+  stopGeminiTurnVoiceSession()
   stopScreenControl()
   stopHandTracking()
   stopAutonomousTask('privacy panic shutdown')
@@ -167,7 +167,7 @@ function createWindow(): void {
 
   mainWindow.on('closed', () => {
     stopVoiceSession()
-    stopGroqVoiceSession()
+    stopGeminiTurnVoiceSession()
     stopScreenControl()
     stopHandTracking()
     wakeWord.stop()
@@ -175,7 +175,7 @@ function createWindow(): void {
   })
 
   attachWindow(mainWindow)
-  attachGroqVoiceWindow(mainWindow)
+  attachGeminiTurnVoiceWindow(mainWindow)
   attachScreenControlWindow(mainWindow)
   attachAutonomousTaskWindow(mainWindow)
   attachAgentStoreWindow(mainWindow)

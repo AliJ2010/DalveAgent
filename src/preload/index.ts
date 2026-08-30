@@ -12,6 +12,7 @@ import type {
   ScheduleRecurrence,
   ScreenControlEvent,
   SettingsState,
+  VoiceEngine,
   VoiceEvent
 } from '@shared/types'
 
@@ -29,12 +30,11 @@ const dalveApi = {
       ipcRenderer.invoke('settings:setAnthropicKey', key),
     setTelegramBotToken: (token: string): Promise<SettingsState> =>
       ipcRenderer.invoke('settings:setTelegramBotToken', token),
-    setGroqKey: (key: string): Promise<SettingsState> => ipcRenderer.invoke('settings:setGroqKey', key),
     setElevenLabsKey: (key: string): Promise<SettingsState> =>
       ipcRenderer.invoke('settings:setElevenLabsKey', key),
     setElevenLabsVoice: (voiceId: string, voiceName: string): Promise<SettingsState> =>
       ipcRenderer.invoke('settings:setElevenLabsVoice', voiceId, voiceName),
-    setVoiceEngine: (engine: 'gemini' | 'groq'): Promise<SettingsState> =>
+    setVoiceEngine: (engine: VoiceEngine): Promise<SettingsState> =>
       ipcRenderer.invoke('settings:setVoiceEngine', engine),
     setDalveTone: (tone: DalveTone): Promise<SettingsState> => ipcRenderer.invoke('settings:setDalveTone', tone),
     setPicovoiceAccessKey: (key: string): Promise<SettingsState> => ipcRenderer.invoke('settings:setPicovoiceAccessKey', key),

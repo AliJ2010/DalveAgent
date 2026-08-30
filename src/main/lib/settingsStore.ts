@@ -1,7 +1,7 @@
 import { app, safeStorage, type BrowserWindow } from 'electron'
 import { join } from 'path'
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
-import type { BuiltinWakeWord, ComposioConnection, DalveTone, McpServerConfig, SettingsState } from '@shared/types'
+import type { BuiltinWakeWord, ComposioConnection, DalveTone, McpServerConfig, SettingsState, VoiceEngine } from '@shared/types'
 import { PRIORITY_COMPOSIO_APPS } from '@shared/types'
 
 let win: BrowserWindow | null = null
@@ -32,16 +32,17 @@ interface StoredSecrets {
   /** Local-only — OAuth client registration + tokens per MCP server (encrypted per-server JSON
    *  blob), keyed by server id. Never synced or exposed to the renderer; see mcpOAuth.ts. */
   mcpOAuthState: Record<string, string>
-  groqApiKey?: string // base64-encoded, safeStorage-encrypted
   elevenLabsApiKey?: string // base64-encoded, safeStorage-encrypted
   elevenLabsVoiceId?: string
   elevenLabsVoiceName?: string
   /** Hand-added voices (e.g. a shared-library voice ElevenLabs' /v2/voices won't list under this
    *  account) — merged into the pickable list alongside whatever the API actually returns. */
   elevenLabsCustomVoices: { voiceId: string; name: string }[]
-  /** Which engine powers the live voice session — kept alongside Gemini (not a replacement) so a
-   *  problem with the new cascade never leaves the user with no working voice option at all. */
-  voiceEngine: 'gemini' | 'groq'
+  /** Which engine powers the live voice session — kept alongside Gemini Live (not a replacement)
+   *  so a problem with the turn-based cascade never leaves the user with no working voice option
+   *  at all. A stored 'groq' value from before that engine was removed just falls back to
+   *  'gemini' at read time (see getVoiceEngine) rather than needing an explicit migration. */
+  voiceEngine: VoiceEngine
   dalveTone: DalveTone
   picovoiceAccessKey?: string // base64-encoded, safeStorage-encrypted
   wakeWordEnabled: boolean
@@ -173,7 +174,6 @@ class SettingsStore {
       dalveMemory: this.data.dalveMemory,
       telegramBotTokenSet: !!this.data.telegramBotToken,
       telegramChatBound: !!this.data.telegramChatId,
-      groqApiKeySet: !!this.data.groqApiKey,
       elevenLabsApiKeySet: !!this.data.elevenLabsApiKey,
       elevenLabsVoiceId: this.data.elevenLabsVoiceId,
       elevenLabsVoiceName: this.data.elevenLabsVoiceName,
@@ -266,16 +266,6 @@ class SettingsStore {
     this.persist()
   }
 
-  setGroqApiKey(key: string): void {
-    this.data.groqApiKey = key ? encrypt(key) : undefined
-    this.persist()
-    this.notifyChange()
-  }
-
-  getGroqApiKey(): string | undefined {
-    return this.data.groqApiKey ? decrypt(this.data.groqApiKey) : undefined
-  }
-
   setElevenLabsApiKey(key: string): void {
     this.data.elevenLabsApiKey = key ? encrypt(key) : undefined
     this.persist()
@@ -309,14 +299,17 @@ class SettingsStore {
     return this.getState()
   }
 
-  setVoiceEngine(engine: 'gemini' | 'groq'): void {
+  setVoiceEngine(engine: VoiceEngine): void {
     this.data.voiceEngine = engine
     this.persist()
     this.notifyChange()
   }
 
-  getVoiceEngine(): 'gemini' | 'groq' {
-    return this.data.voiceEngine
+  // A value persisted before the old Groq-backed engine was removed reads back here as literal
+  // 'groq' (never migrated on disk) — falling back to 'gemini' rather than trusting it as a
+  // VoiceEngine keeps every caller's type honest without needing a one-time migration step.
+  getVoiceEngine(): VoiceEngine {
+    return this.data.voiceEngine === 'gemini' || this.data.voiceEngine === 'geminiTurns' ? this.data.voiceEngine : 'gemini'
   }
 
   setDalveTone(tone: DalveTone): void {

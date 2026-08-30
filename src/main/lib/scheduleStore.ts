@@ -107,8 +107,8 @@ export const scheduleStore = new Proxy({} as ScheduleStore, {
   }
 })
 
-// --- Shared voice-tool logic (one real implementation, used by geminiLive.ts, groqVoice.ts, and
-// agentTools.ts's shared tool set — each declares its own tool schema per its own conventions,
+// --- Shared voice-tool logic (one real implementation, used by geminiLive.ts, geminiTurnVoice.ts,
+// and agentTools.ts's shared tool set — each declares its own tool schema per its own conventions,
 // but all three call these same functions so the actual behavior never drifts between engines). ---
 
 const RECURRENCES = new Set(['none', 'daily', 'weekdays', 'weekly', 'monthly'])

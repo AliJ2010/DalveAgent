@@ -12,7 +12,6 @@ export function SettingsScreen(): React.JSX.Element {
   const setGeminiKey = useSettingsStore((s) => s.setGeminiKey)
   const setAnthropicKey = useSettingsStore((s) => s.setAnthropicKey)
   const setTelegramBotToken = useSettingsStore((s) => s.setTelegramBotToken)
-  const setGroqKey = useSettingsStore((s) => s.setGroqKey)
   const setElevenLabsKey = useSettingsStore((s) => s.setElevenLabsKey)
   const setElevenLabsVoice = useSettingsStore((s) => s.setElevenLabsVoice)
   const setVoiceEngine = useSettingsStore((s) => s.setVoiceEngine)
@@ -36,7 +35,6 @@ export function SettingsScreen(): React.JSX.Element {
   const [geminiInput, setGeminiInput] = useState('')
   const [anthropicInput, setAnthropicInput] = useState('')
   const [telegramInput, setTelegramInput] = useState('')
-  const [groqInput, setGroqInput] = useState('')
   const [elevenLabsInput, setElevenLabsInput] = useState('')
   const [picovoiceInput, setPicovoiceInput] = useState('')
   const [composioInput, setComposioInput] = useState('')
@@ -82,13 +80,6 @@ export function SettingsScreen(): React.JSX.Element {
     await setTelegramBotToken(telegramInput.trim())
     setTelegramInput('')
     flash('Telegram bot token saved — message the bot once to link this device.')
-  }
-
-  async function saveGroq(): Promise<void> {
-    if (!groqInput.trim()) return
-    await setGroqKey(groqInput.trim())
-    setGroqInput('')
-    flash('Groq API key saved')
   }
 
   async function savePicovoice(): Promise<void> {
@@ -239,7 +230,7 @@ export function SettingsScreen(): React.JSX.Element {
 
         <Section title="Voice engine">
           <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
-            {(['gemini', 'groq'] as const).map((engine) => (
+            {(['gemini', 'geminiTurns'] as const).map((engine) => (
               <button
                 key={engine}
                 onClick={() => void setVoiceEngine(engine)}
@@ -254,26 +245,14 @@ export function SettingsScreen(): React.JSX.Element {
                   color: settings?.voiceEngine === engine ? 'var(--c-gold-bright)' : 'var(--c-text-2)'
                 }}
               >
-                {engine === 'gemini' ? 'Gemini Live' : 'Groq + ElevenLabs'}
+                {engine === 'gemini' ? 'Gemini Live' : 'Gemini (Turn-Based)'}
               </button>
             ))}
           </div>
           <p style={{ fontSize: 11, color: 'var(--c-text-3)', marginBottom: 4 }}>
-            Groq + ElevenLabs is a cheaper, turn-based alternative — DALVE listens, waits for you
-            to stop talking, then replies. You can still interrupt her mid-reply.
-          </p>
-        </Section>
-
-        <Section title="Groq API key">
-          <KeyRow
-            placeholder={settings?.groqApiKeySet ? 'Key saved — enter a new key to replace it' : 'Paste your Groq API key'}
-            value={groqInput}
-            onChange={setGroqInput}
-            onSubmit={saveGroq}
-            saved={settings?.groqApiKeySet}
-          />
-          <p style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 6 }}>
-            Used for speech-to-text and reasoning when the voice engine above is set to Groq.
+            Gemini (Turn-Based) is a turn-based alternative on the same Gemini key above — DALVE
+            listens, waits for you to stop talking, then replies. You can still interrupt her
+            mid-reply.
           </p>
         </Section>
 
@@ -346,8 +325,8 @@ export function SettingsScreen(): React.JSX.Element {
             </select>
           )}
           <p style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 6 }}>
-            Used to speak DALVE's replies when the voice engine above is set to Groq. Each agent can
-            override this with its own voice from its Voice tab.
+            Used to speak DALVE's replies when the voice engine above is set to Gemini (Turn-Based).
+            Each agent can override this with its own voice from its Voice tab.
           </p>
         </Section>
 

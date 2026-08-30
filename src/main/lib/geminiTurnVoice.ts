@@ -1,9 +1,4 @@
-import Groq, { toFile } from 'groq-sdk'
-import type {
-  ChatCompletionMessageParam,
-  ChatCompletionTool,
-  ChatCompletionContentPart
-} from 'groq-sdk/resources/chat/completions'
+import { GoogleGenAI, type Content, type FunctionDeclaration, type Part } from '@google/genai'
 import type { BrowserWindow } from 'electron'
 import { shell } from 'electron'
 import log from 'electron-log/main'
@@ -28,21 +23,26 @@ import type { AgentConfig, VoiceEvent } from '@shared/types'
 import { DALVE_TONE_PROMPTS } from '@shared/types'
 
 /**
- * A cascaded voice engine (Groq for STT + reasoning, ElevenLabs for speech) — an alternative to
- * geminiLive.ts, not a replacement for it (kept selectable via settingsStore.voiceEngine so a
- * problem with this newer, more moving-parts pipeline never leaves the user with no working
- * voice option). Real, stated limitation up front: neither Groq nor ElevenLabs offers a single
- * live bidirectional speech-to-speech model the way Gemini Live does — this is a genuine
- * record → transcribe → reason → synthesize → play cascade. Continuous listening and barge-in
- * (the user talking over DALVE mid-reply) are both real here, just built on top of that cascade
- * rather than provided natively: this module runs its own voice-activity detection (RMS energy
- * over the same continuous mic stream audioCapture.ts already sends) to find utterance
- * boundaries, and keeps monitoring that same stream while DALVE's own reply is playing to detect
- * the user cutting in.
+ * A cascaded voice engine (Gemini's non-live generateContent for STT + reasoning, ElevenLabs for
+ * speech) — an alternative to geminiLive.ts's true bidirectional streaming session, not a
+ * replacement for it (kept selectable via settingsStore.voiceEngine so a problem with this
+ * turn-based pipeline never leaves the user with no working voice option). This REPLACED an
+ * earlier Groq-backed version of this same engine — real reported failure: Groq's free tier
+ * rate-limited on essentially every turn, and a fix (skip re-attaching a screenshot on every
+ * turn) wasn't enough to make it reliable. Gemini's own free tier is dramatically more generous
+ * (hundreds of thousands of tokens/minute vs. Groq's flat 8,000), and reuses the SAME Gemini API
+ * key already configured for Live — no new signup, no separate credential. Real, stated
+ * limitation up front: this is a genuine record → transcribe+reason (one generateContent call,
+ * since Gemini understands audio directly) → synthesize → play cascade, not a single live
+ * bidirectional model the way Gemini Live is. Continuous listening and barge-in (the user talking
+ * over DALVE mid-reply) are both real here, just built on top of that cascade: this module runs
+ * its own voice-activity detection (RMS energy over the same continuous mic stream
+ * audioCapture.ts already sends) to find utterance boundaries, and keeps monitoring that same
+ * stream while DALVE's own reply is playing to detect the user cutting in.
  */
 
-const CHAT_MODEL = 'qwen/qwen3.8-27b' // Groq's own docs mark this "Preview" — re-check availability if this starts 404ing
-const STT_MODEL = 'whisper-large-v3-turbo'
+// Re-check https://ai.google.dev/gemini-api/docs/models before shipping — Google rotates these.
+const CHAT_MODEL = 'gemini-3.6-flash'
 const ELEVENLABS_MODEL = 'eleven_flash_v2_5' // lowest-latency ElevenLabs model, meant for real-time use
 const SAMPLE_RATE = 16000 // matches audioCapture.ts's fixed capture rate
 
@@ -76,7 +76,7 @@ function emitActionLog(label: string, result: Record<string, unknown>): void {
   emit({
     type: 'actionLog',
     entry: {
-      id: `groq_${Date.now()}_${actionLogCounter++}`,
+      id: `geminiTurns_${Date.now()}_${actionLogCounter++}`,
       label,
       status: typeof result.error === 'string' ? 'error' : 'success',
       detail: detail?.slice(0, 200),
@@ -88,7 +88,11 @@ function emitActionLog(label: string, result: Record<string, unknown>): void {
 type Phase = 'idle' | 'listening' | 'thinking' | 'speaking'
 let phase: Phase = 'idle'
 let activeAgentId: string | null = null
-let history: ChatCompletionMessageParam[] = []
+// Gemini's Content history — role 'user'|'model', each with `parts`. Distinct from geminiLive.ts
+// (a true live session with no client-held history) and from the old Groq engine's OpenAI-shaped
+// ChatCompletionMessageParam[] — this is Gemini's own multi-turn function-calling shape.
+let history: Content[] = []
+let systemPromptText = ''
 
 // Utterance buffering + VAD state
 let audioBuffer: Buffer[] = []
@@ -105,13 +109,10 @@ export function getActiveAgentId(): string | null {
   return activeAgentId
 }
 
-function getClient(): Groq {
-  const apiKey = settingsStore.getGroqApiKey()
-  if (!apiKey) throw new Error('Add your Groq API key in Settings first.')
-  // The SDK's own default (60s timeout, retried) could otherwise leave a live voice turn silently
-  // "connecting" for minutes on a genuine network hang — a bounded, fast failure here means a bad
-  // connection surfaces as a spoken error almost immediately instead.
-  return new Groq({ apiKey, timeout: 20000, maxRetries: 1 })
+function getClient(): GoogleGenAI {
+  const apiKey = settingsStore.getGeminiApiKey()
+  if (!apiKey) throw new Error('Add your Gemini API key in Settings first.')
+  return new GoogleGenAI({ apiKey })
 }
 
 async function fetchWithTimeout(url: string, init: RequestInit, ms: number): Promise<Response> {
@@ -126,17 +127,19 @@ async function fetchWithTimeout(url: string, init: RequestInit, ms: number): Pro
 
 export async function startVoiceSession(agentId: string | null = null): Promise<void> {
   if (phase !== 'idle') return
-  const apiKey = settingsStore.getGroqApiKey()
-  if (!apiKey) throw new Error('Add your Groq API key in Settings first.')
+  const apiKey = settingsStore.getGeminiApiKey()
+  if (!apiKey) throw new Error('Add your Gemini API key in Settings first.')
 
   const agent = agentId ? (agentStore.get(agentId) ?? null) : null
   if (agentId && !agent) throw new Error('That agent no longer exists.')
 
   activeAgentId = agentId
-  history = [{ role: 'system', content: buildSystemPrompt(agent) }]
+  systemPromptText = buildSystemPrompt(agent)
+  history = []
   audioBuffer = []
   speechStartedAt = null
   silenceStartedAt = null
+  lastScreenshotAttachedAt = 0
   gridTargeting.clearGrids()
   screenControl.setControlGranted(true)
 
@@ -211,7 +214,7 @@ function checkBargeIn(rms: number): void {
     if (bargeInAboveFloorSince === null) bargeInAboveFloorSince = now
     else if (now - bargeInAboveFloorSince > BARGE_IN_MS) {
       bargeInAboveFloorSince = null
-      log.info('[groqVoice] barge-in detected, interrupting playback')
+      log.info('[geminiTurnVoice] barge-in detected, interrupting playback')
       emit({ type: 'interrupted' })
       phase = 'listening'
       emit({ type: 'state', state: 'listening' })
@@ -224,7 +227,7 @@ function checkBargeIn(rms: number): void {
   }
 }
 
-/** 44-byte canonical WAV header wrapping raw 16kHz mono PCM16 — Groq's transcription endpoint
+/** 44-byte canonical WAV header wrapping raw 16kHz mono PCM16 — Gemini's audio understanding
  *  wants a real container format, not bare PCM bytes. */
 function wrapWav(pcm16: Buffer): Buffer {
   const header = Buffer.alloc(44)
@@ -249,11 +252,22 @@ async function handleUtterance(pcm16: Buffer): Promise<void> {
   try {
     const client = getClient()
     const wav = wrapWav(pcm16)
-    const transcription = await client.audio.transcriptions.create({
-      model: STT_MODEL,
-      file: await toFile(wav, 'utterance.wav', { type: 'audio/wav' })
+    // A separate, cheap, tools-free call just to get plain text — keeps the main tool-calling
+    // turn's history as clean text rather than re-sending raw audio in every subsequent request
+    // for the rest of the conversation.
+    const result = await client.models.generateContent({
+      model: CHAT_MODEL,
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            { inlineData: { mimeType: 'audio/wav', data: wav.toString('base64') } },
+            { text: 'Transcribe exactly what is said in this audio. Output ONLY the transcription text, nothing else — no quotes, no preamble.' }
+          ]
+        }
+      ]
     })
-    const text = transcription.text.trim()
+    const text = (result.text ?? '').trim()
     if (!text) {
       phase = 'listening'
       emit({ type: 'state', state: 'listening' })
@@ -262,16 +276,16 @@ async function handleUtterance(pcm16: Buffer): Promise<void> {
     emit({ type: 'inputTranscript', text, finished: true })
     await runTurn(text)
   } catch (err) {
-    log.error('[groqVoice] utterance handling failed:', err instanceof Error ? err.stack : err)
+    log.error('[geminiTurnVoice] utterance handling failed:', err instanceof Error ? err.stack : err)
     emit({ type: 'error', message: err instanceof Error ? err.message : String(err) })
     phase = 'listening'
     emit({ type: 'state', state: 'listening' })
   }
 }
 
-const SYSTEM_PROMPT = `You are DALVE, a voice-first AI operating system, talking with the user through voice (Groq + ElevenLabs pipeline). Speak naturally and conversationally, concise since this is spoken. Get straight to doing what's asked — never repeat the instruction back before acting. You have standing authorization to click/type/control the screen and browser once asked; no separate permission tool needed. The only hard limit: never type a password, payment card number, or other credential yourself.
+const SYSTEM_PROMPT = `You are DALVE, a voice-first AI operating system, talking with the user through voice (a turn-based Gemini + ElevenLabs pipeline). Speak naturally and conversationally, concise since this is spoken. Get straight to doing what's asked — never repeat the instruction back before acting. You have standing authorization to click/type/control the screen and browser once asked; no separate permission tool needed. The only hard limit: never type a password, payment card number, or other credential yourself.
 
-Real targeting priority, strongest to weakest: (1) A direct integration tool (Composio/MCP) if one exists. (2) browser_* tools for anything web-based — real DOM lookup, not a coordinate guess. (3) click_element for native desktop apps with a visible label. (4) click_mouse/move_mouse from the screenshot you're given — last resort, for non-textual content only. A few tools (trading-chart price targeting, grid/board targeting, hand tracking, spatial AR objects, drag, skill recording, undo) aren't available on this engine specifically — if asked for one of those, say so and suggest switching to the Gemini Live engine in Settings rather than guessing with click_mouse.
+Real targeting priority, strongest to weakest: (1) A direct integration tool (Composio/MCP) if one exists. (2) browser_* tools for anything web-based — real DOM lookup, not a coordinate guess. (3) click_element for native desktop apps with a visible label. (4) click_mouse/move_mouse from the screenshot you're given — last resort, for non-textual content only. Only spatial AR objects and continuous unattended screen-watching (the live video feed itself, not a one-off screenshot) aren't available on this engine specifically — if asked for either, say so and suggest switching to the Gemini Live engine in Settings.
 
 Never describe a physical action before actually calling the tool, and never describe an outcome (a message sent, a piece moved) until the result confirms it actually happened. Same for state: if the user says something is off/broken and you say you fixed or restarted it, that's only true if you called the real tool for it in this exact reply — a past tool call is never evidence for a claim you're making now.
 
@@ -279,12 +293,9 @@ A single instruction often spans multiple applications — "read the price in th
 
 IMPORTANT structural limit to understand about yourself: this engine only ever takes a turn when the user just spoke — there is no continuous screen watching here at all, unlike a fully live session. Nothing "wakes you up" on its own when a new WhatsApp message arrives while the user isn't talking to you. That is exactly what start_autonomous_task is for — a separate background loop that actively re-checks the screen every ~20 seconds and can act with nobody present. Whenever what's being asked amounts to "keep doing this without me talking to you" — monitoring a chat (WhatsApp especially) and replying to new messages as they come in is the single most common real case — you MUST call start_autonomous_task, every time. Give it a clear one-sentence goal; it keeps going until the goal is done, the user stops it, or you call stop_autonomous_task.`
 
-/** Builds the ACTUAL system prompt for a session — a real bug existed here before: this engine
- *  always used the generic SYSTEM_PROMPT below regardless of which agent was active, and never
- *  read back either DALVE's own saved memory or an agent's memory, so remember_fact genuinely
- *  persisted facts (see the 'remember_fact' case below) that this engine then never saw again —
- *  "it says it has memory... but it doesn't look like it" was real, not imagined. Mirrors
- *  geminiLive.ts's equivalent construction so both engines behave the same way here. */
+/** Builds the ACTUAL system prompt for a session — real per-agent memory + DALVE's own memory
+ *  both get read back here (a bug in an earlier version of this engine's predecessor read the
+ *  wrong one; fixed and mirrored across every engine now, see geminiLive.ts's equivalent). */
 function buildSystemPrompt(agent: AgentConfig | null): string {
   const base = agent ? agent.systemPrompt : SYSTEM_PROMPT
   const memory = agent ? agent.memory : settingsStore.getDalveMemory()
@@ -301,32 +312,27 @@ function buildSystemPrompt(agent: AgentConfig | null): string {
   return base + toneNote + memoryNote
 }
 
-// Groq's free tier caps this model at 8,000 tokens/minute AND 3 images per request — confirmed
-// live from real logs showing repeated 413 "tokens per minute" and 400 "too many images" errors.
-// A full-resolution screenshot resent on every turn (history kept every prior one, unbounded)
-// blew past both limits within a handful of exchanges. maxWidth shrinks each screenshot before
-// it's ever added; stripOldImages/trimHistory keep old ones from piling up turn after turn.
+// Gemini's free tier is dramatically more generous than Groq's old flat 8,000 tokens/minute, but
+// a screenshot is still real, non-zero cost resent on every turn for no reason most turns don't
+// need it — same cooldown discipline as before, now a comfort margin rather than a hard survival
+// requirement.
 const SCREENSHOT_MAX_WIDTH = 1024
 const SCREENSHOT_QUALITY = 65
-// See the real per-turn token math in runTurn — this is the main lever that actually keeps quick
-// back-and-forth exchanges under the 8K/minute ceiling now that trimming tool count and history
-// alone wasn't enough (a real reported failure: rate-limited on a plain "Hello.").
 const SCREENSHOT_COOLDOWN_MS = 20_000
 let lastScreenshotAttachedAt = 0
-const MAX_HISTORY_MESSAGES = 12
+const MAX_HISTORY_MESSAGES = 16
 
 /** Keeps only the most recent screenshot in the whole conversation — every earlier one becomes a
  *  short text stand-in instead of being resent (and re-billed) on every subsequent turn. */
-function stripOldImages(msgs: ChatCompletionMessageParam[]): void {
+function stripOldImages(contents: Content[]): void {
   let sawImage = false
-  for (let i = msgs.length - 1; i >= 0; i--) {
-    const msg = msgs[i]
-    if (msg.role !== 'user' || !Array.isArray(msg.content)) continue
-    if (!msg.content.some((p) => p.type === 'image_url')) continue
+  for (let i = contents.length - 1; i >= 0; i--) {
+    const c = contents[i]
+    if (c.role !== 'user' || !c.parts?.some((p) => p.inlineData?.mimeType?.startsWith('image/'))) continue
     if (sawImage) {
-      msg.content = [
-        ...msg.content.filter((p) => p.type !== 'image_url'),
-        { type: 'text', text: '[earlier screenshot omitted]' }
+      c.parts = [
+        ...(c.parts ?? []).filter((p) => !p.inlineData?.mimeType?.startsWith('image/')),
+        { text: '[earlier screenshot omitted]' }
       ]
     } else {
       sawImage = true
@@ -334,21 +340,15 @@ function stripOldImages(msgs: ChatCompletionMessageParam[]): void {
   }
 }
 
-/** Keeps the system prompt plus only the most recent exchanges — otherwise token usage grows
- *  unbounded turn after turn regardless of images, and reliably blows the 8K TPM limit by itself. */
+/** Keeps only the most recent exchanges — otherwise token usage grows unbounded turn after turn. */
 function trimHistory(): void {
   if (history.length <= MAX_HISTORY_MESSAGES) return
-  const hasSystem = history[0]?.role === 'system'
-  const system = hasSystem ? [history[0]] : []
-  history = [...system, ...history.slice(-(MAX_HISTORY_MESSAGES - system.length))]
+  history = history.slice(-MAX_HISTORY_MESSAGES)
 }
 
 function friendlyTurnError(raw: string): string {
-  if (raw.includes('rate_limit_exceeded')) {
-    return "Groq's free-tier rate limit was hit for that reply — wait a few seconds and try again, or ask something shorter."
-  }
-  if (raw.includes('Too many images')) {
-    return 'That request carried too many images for this model — try again, it should self-correct now.'
+  if (raw.includes('RESOURCE_EXHAUSTED') || raw.includes('rate limit') || raw.includes('429')) {
+    return "Gemini's rate limit was hit for that reply — wait a few seconds and try again."
   }
   return raw
 }
@@ -356,92 +356,84 @@ function friendlyTurnError(raw: string): string {
 async function runTurn(userText: string): Promise<void> {
   try {
     const client = getClient()
-    // A screenshot costs a FLAT ~2048 input tokens on Groq's vision model regardless of
-    // resolution — real, confirmed cost, not something a smaller/lower-quality image reduces. On
-    // an 8,000-token-per-MINUTE budget, attaching one on every single turn (as this did before)
-    // means two or three quick back-and-forth exchanges inside the same minute alone burn well
-    // over half the whole budget on images nobody asked to have re-sent, before the system
-    // prompt, tools, or the actual conversation cost anything — confirmed the real cause of a
-    // rate limit hitting on a plain "Hello." A cooldown means a fast exchange only pays for a
-    // screenshot once, not once per turn; the screen context can be at most this many seconds
-    // stale, which is a real but minor trade-off against reliably getting a reply at all.
     const now = Date.now()
     const needsScreenshot = now - lastScreenshotAttachedAt > SCREENSHOT_COOLDOWN_MS
     const screenshot = needsScreenshot ? await screenControl.captureScreenshotOnce(SCREENSHOT_QUALITY, SCREENSHOT_MAX_WIDTH) : null
-    // Appended per-turn (not baked into the cached system message) so it's always accurate even
-    // in a session that's been open for hours — needed for create_reminder to resolve relative
-    // times ("tomorrow", "in an hour") correctly regardless of how long the session's been running.
-    const content: ChatCompletionContentPart[] = [{ type: 'text', text: `${userText}\n\n[Current date/time: ${new Date().toString()}]` }]
+    const parts: Part[] = [{ text: `${userText}\n\n[Current date/time: ${new Date().toString()}]` }]
     if (screenshot) {
-      content.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${screenshot}` } })
+      parts.push({ inlineData: { mimeType: 'image/jpeg', data: screenshot } })
       lastScreenshotAttachedAt = now
     }
-    // Defensive fallback only — startVoiceSession always seeds this now; kept in case this is
-    // ever reached with no active session.
-    if (history.length === 0) {
-      const agent = activeAgentId ? (agentStore.get(activeAgentId) ?? null) : null
-      history.push({ role: 'system', content: buildSystemPrompt(agent) })
-    }
-    history.push({ role: 'user', content })
+    history.push({ role: 'user', parts })
     stripOldImages(history)
     trimHistory()
 
     const tools = await buildTools()
     emit({ type: 'toolActivity', active: false })
 
-    // Raised from 8 — a real cross-app task (read a value in one app, switch to another, act on
-    // it, switch again) can easily need more tool-call rounds than a single-app action, and the
-    // old cap silently dropped the turn with zero explanation if it ran out mid-chain.
+    // A real cross-app task (read a value in one app, switch to another, act on it, switch again)
+    // can easily need more tool-call rounds than a single-app action.
     const MAX_ROUNDS = 16
     let exhausted = true
     for (let round = 0; round < MAX_ROUNDS; round++) {
-      const response = await client.chat.completions.create({
+      const response = await client.models.generateContent({
         model: CHAT_MODEL,
-        messages: history,
-        tools,
-        max_tokens: 1024
+        contents: history,
+        config: {
+          systemInstruction: { parts: [{ text: systemPromptText }] },
+          tools: [{ functionDeclarations: tools }],
+          maxOutputTokens: 1024
+        }
       })
-      const message = response.choices[0]?.message
-      if (!message) break
-      history.push(message)
 
-      if (!message.tool_calls || message.tool_calls.length === 0) {
-        const text = message.content ?? ''
+      const calls = response.functionCalls
+      // The model's OWN turn straight from the API, not a reconstruction from the `.functionCalls`
+      // convenience getter — the real Content can mix text and function calls in one turn, and
+      // this is guaranteed to match exactly what the model actually produced either way.
+      const modelTurn: Content = response.candidates?.[0]?.content ?? { role: 'model', parts: calls?.map((c) => ({ functionCall: c })) ?? [{ text: response.text ?? '' }] }
+      // Persisted before executing tools so the follow-up functionResponse turn lines up with
+      // real prior model output — Gemini's generateContent has no server-held history the way a
+      // live session does, so every turn has to be threaded through `history` by hand.
+      history.push(modelTurn)
+
+      if (!calls || calls.length === 0) {
+        const text = response.text ?? ''
         if (text) await speak(text)
         exhausted = false
         break
       }
 
-      emit({ type: 'toolActivity', active: true, label: message.tool_calls[0]?.function?.name })
-      for (const call of message.tool_calls) {
-        let args: Record<string, unknown> = {}
-        try {
-          args = JSON.parse(call.function.arguments || '{}')
-        } catch {
-          // malformed args — executeVoiceTool below will just see an empty object
-        }
+      emit({ type: 'toolActivity', active: true, label: calls[0]?.name })
+      const responseParts: Part[] = []
+      for (const call of calls) {
+        const name = call.name ?? ''
+        const args = (call.args ?? {}) as Record<string, unknown>
         let result: Record<string, unknown>
         try {
-          result = await executeVoiceTool(call.function.name, args)
+          result = await executeVoiceTool(name, args)
         } catch (err) {
           result = { error: err instanceof Error ? err.message : String(err) }
         }
-        emitActionLog(call.function.name, result)
-        if (isRecording() && !SKILL_META_TOOLS.has(call.function.name) && typeof result.error !== 'string' && result.status !== 'FAILED') {
-          recordStep(call.function.name, args)
+        emitActionLog(name, result)
+        if (isRecording() && !SKILL_META_TOOLS.has(name) && typeof result.error !== 'string' && result.status !== 'FAILED') {
+          recordStep(name, args)
         }
-        history.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(result).slice(0, 4000) })
+        // Gemini 3 models always return a unique `id` on every functionCall and expect that
+        // exact id echoed back on the matching functionResponse — without it, the model can't
+        // reliably map a result back to the right call once more than one tool runs in the same
+        // turn (confirmed against Gemini's own function-calling docs, not just inferred).
+        responseParts.push({ functionResponse: { id: call.id, name, response: result } })
       }
+      history.push({ role: 'user', parts: responseParts })
       emit({ type: 'toolActivity', active: false })
     }
 
     // Same honest "ran out of room" acknowledgment autonomousTask.ts already gives on its own
-    // round cap — silence here would look exactly like the "stuck" symptom this session already
-    // root-caused once tonight, just from a different limit.
+    // round cap — silence here would look exactly like a "stuck" symptom from a different limit.
     if (exhausted) await speak("I've made progress on that but hit my step limit for one reply — tell me to continue and I'll keep going from here.")
   } catch (err) {
     const raw = err instanceof Error ? err.message : String(err)
-    log.error('[groqVoice] turn failed:', err instanceof Error ? err.stack : err)
+    log.error('[geminiTurnVoice] turn failed:', err instanceof Error ? err.stack : err)
     emit({ type: 'error', message: friendlyTurnError(raw) })
   } finally {
     if (phase !== 'idle') {
@@ -460,7 +452,7 @@ async function speak(text: string): Promise<void> {
   const agentVoiceId = activeAgentId ? agentStore.get(activeAgentId)?.elevenLabsVoiceId : undefined
   const voiceId = agentVoiceId ?? settingsStore.getState().elevenLabsVoiceId
   if (!apiKey || !voiceId) {
-    log.info('[groqVoice] no ElevenLabs key/voice configured — replying as text only')
+    log.info('[geminiTurnVoice] no ElevenLabs key/voice configured — replying as text only')
     return
   }
 
@@ -495,7 +487,7 @@ async function speak(text: string): Promise<void> {
     // speak() is only ever called from inside runTurn()'s try block, whose `finally` resets
     // phase/state back to listening once this returns — no reset needed here either way.
     const isTimeout = err instanceof Error && err.name === 'AbortError'
-    log.error('[groqVoice] ElevenLabs TTS failed:', err instanceof Error ? err.stack : err)
+    log.error('[geminiTurnVoice] ElevenLabs TTS failed:', err instanceof Error ? err.stack : err)
     emit({
       type: 'error',
       message: isTimeout ? 'ElevenLabs took too long to respond — try again.' : err instanceof Error ? err.message : String(err)
@@ -503,24 +495,19 @@ async function speak(text: string): Promise<void> {
   }
 }
 
-// --- Tool declarations (OpenAI/Groq function-calling shape) ---
+// --- Tool declarations (Gemini function-calling shape) ---
 
-function tool(name: string, description: string, parameters: Record<string, unknown>): ChatCompletionTool {
-  return { type: 'function', function: { name, description, parameters } }
+function tool(name: string, description: string, parameters: Record<string, unknown>): FunctionDeclaration {
+  return { name, description, parametersJsonSchema: parameters }
 }
 
 const SPEED_ENUM = { type: 'string', enum: ['instant', 'visible'] }
 const BUTTON_ENUM = { type: 'string', enum: ['left', 'right', 'middle'] }
 
-// Kept deliberately small and terse — a real, verified platform constraint, not a style choice:
-// Groq's free plan caps EVERY model at a flat 8,000 tokens/minute total (confirmed live from
-// their own docs), and this whole tools array is resent on every single request regardless of
-// conversation content. The full ~48-tool version with multi-sentence descriptions this used to
-// be was almost certainly consuming most of that budget by itself — real logs showed a two-word
-// "Hello" message triggering a 21,284-token request. Niche tools below are commented with where
-// they still live (Gemini Live and/or the Claude-based autonomous/Telegram tool set) — cut here
-// ONLY to fit Groq's free tier, not removed from DALVE.
-const STATIC_TOOLS: ChatCompletionTool[] = [
+// Kept deliberately small and terse — this whole tools array is resent on every single request
+// regardless of conversation content, same discipline as the engine this replaced even though
+// Gemini's free tier has far more headroom. Niche tools below still live on Gemini Live only.
+const STATIC_TOOLS: FunctionDeclaration[] = [
   tool('open_url', "Open a URL in the user's browser.", { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] }),
   tool('open_application', 'Opens a native app by name.', { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] }),
   tool('activate_application', 'Brings a running app to the front by name.', { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] }),
@@ -571,10 +558,52 @@ const STATIC_TOOLS: ChatCompletionTool[] = [
   }),
   tool('scroll', 'Scrolls at the current mouse position.', { type: 'object', properties: { deltaX: { type: 'number' }, deltaY: { type: 'number' } } }),
   tool('take_screenshot', 'Saves a real screenshot as a PNG file the user can open later.', { type: 'object', properties: {} }),
-  // Skills recording (start/stop/run/list), grid targeting (define_grid/click_grid_cell), trading
-  // tools (open_trading_setup/click_price_level), hand-tracking start/stop, drag_mouse, and
-  // undo_last_typed_text are cut from Groq's tool list to fit the budget above — all still fully
-  // available on Gemini Live.
+  // These were cut on the old Groq-backed version of this engine specifically to fit its harsh
+  // flat 8,000-tokens/minute free-tier cap — Gemini's own free tier has no comparable constraint,
+  // so there's no reason to keep them off this engine; their handlers already existed either way.
+  tool('open_trading_setup', 'Sets up the trading workspace across monitors (TradingView + Discord + Tradovate). Windows only.', { type: 'object', properties: {} }),
+  tool('drag_mouse', 'A real press-move-release drag — for a chess piece, a slider, a reorderable item. Two clicks will NOT do a drag.', {
+    type: 'object',
+    properties: { fromX: { type: 'number' }, fromY: { type: 'number' }, toX: { type: 'number' }, toY: { type: 'number' }, speed: SPEED_ENUM },
+    required: ['fromX', 'fromY', 'toX', 'toY']
+  }),
+  tool('click_price_level', "Clicks an EXACT price on a trading chart via OCR-calibrated price-scale reading, not a guessed coordinate. Use for any specific-price action.", {
+    type: 'object',
+    properties: { price: { type: 'number' }, button: { type: 'string', enum: ['left', 'right'] }, x: { type: 'number' } },
+    required: ['price']
+  }),
+  tool('start_hand_tracking', "Turns on the webcam, tracks the user's hand as a real cursor (index finger moves it, thumb+index pinch clicks).", { type: 'object', properties: {} }),
+  tool('stop_hand_tracking', 'Turns off hand tracking and releases the webcam.', { type: 'object', properties: {} }),
+  tool('define_grid', 'Registers the pixel boundary of a grid/board (chess, sudoku, spreadsheet) with no readable labels, for click_grid_cell to target precisely.', {
+    type: 'object',
+    properties: {
+      label: { type: 'string' },
+      x: { type: 'number' },
+      y: { type: 'number' },
+      width: { type: 'number' },
+      height: { type: 'number' },
+      rows: { type: 'number' },
+      cols: { type: 'number' }
+    },
+    required: ['label', 'x', 'y', 'width', 'height', 'rows', 'cols']
+  }),
+  tool('click_grid_cell', 'Clicks one exact cell of a previously-defined grid (see define_grid) by row/col, 0-indexed from top-left as currently visible.', {
+    type: 'object',
+    properties: {
+      label: { type: 'string' },
+      row: { type: 'number' },
+      col: { type: 'number' },
+      button: BUTTON_ENUM,
+      double: { type: 'boolean' },
+      speed: SPEED_ENUM
+    },
+    required: ['label', 'row', 'col']
+  }),
+  tool('undo_last_typed_text', "Sends Ctrl+Z to undo the last text DALVE typed with type_text/press_key — only works before a click/send happened since.", { type: 'object', properties: {} }),
+  tool('start_recording_skill', 'Starts recording every action DALVE takes from now on, until stop_recording_skill is called.', { type: 'object', properties: {} }),
+  tool('stop_recording_skill', 'Stops recording and saves everything done since start_recording_skill as a named skill.', { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] }),
+  tool('run_skill', 'Replays a previously recorded skill by name, step by step.', { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] }),
+  tool('list_skills', 'Lists every recorded skill by name.', { type: 'object', properties: {} }),
   tool('create_reminder', 'Schedules a reminder/message. Compute dueAtIso as real ISO 8601 from the given current date/time. type "message" performs `instruction` when due.', {
     type: 'object',
     properties: {
@@ -586,12 +615,19 @@ const STATIC_TOOLS: ChatCompletionTool[] = [
     },
     required: ['title', 'dueAtIso', 'recurrence', 'type']
   }),
+  tool('list_reminders', 'Lists every upcoming reminder and scheduled message.', { type: 'object', properties: {} }),
+  tool('cancel_reminder', 'Cancels a reminder or scheduled message by its exact title.', { type: 'object', properties: { title: { type: 'string' } }, required: ['title'] }),
   tool('list_common_folders', "Returns the user's real Home/Desktop/Documents/Downloads/Pictures paths.", { type: 'object', properties: {} }),
+  tool('list_directory', 'Lists files and subfolders in a real directory path.', { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] }),
+  tool('read_text_file', 'Reads a plain text/code/markdown/csv/json file. For PDFs or images use read_document instead.', { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] }),
   tool('write_text_file', 'Writes/appends a plain text file.', {
     type: 'object',
     properties: { path: { type: 'string' }, content: { type: 'string' }, append: { type: 'boolean' } },
     required: ['path', 'content']
   }),
+  tool('delete_file', 'Moves a file to the Recycle Bin (recoverable, not a permanent delete).', { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] }),
+  tool('move_file', 'Moves or renames a file from one path to another.', { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' } }, required: ['from', 'to'] }),
+  tool('search_files', 'Searches for files by partial, case-insensitive filename under a directory, recursively.', { type: 'object', properties: { directory: { type: 'string' }, query: { type: 'string' } }, required: ['directory', 'query'] }),
   tool('read_document', 'Reads a file by path — text/code/csv/json directly, PDFs via text extraction, images as vision content. No .docx yet.', { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] }),
   tool('read_clipboard', "Reads the user's OS clipboard text.", { type: 'object', properties: {} }),
   tool('write_clipboard', "Sets the user's OS clipboard text.", { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] }),
@@ -599,7 +635,7 @@ const STATIC_TOOLS: ChatCompletionTool[] = [
   tool('stop_autonomous_task', 'Stops the background autonomous task.', { type: 'object', properties: {} })
 ]
 
-async function buildTools(): Promise<ChatCompletionTool[]> {
+async function buildTools(): Promise<FunctionDeclaration[]> {
   const tools = [...STATIC_TOOLS]
 
   const composioConnections = settingsStore.getState().composioConnections.filter((c) => c.connected)
@@ -608,7 +644,7 @@ async function buildTools(): Promise<ChatCompletionTool[]> {
       const composioTools = await composio.getToolsForApps(composioConnections.map((c) => c.appKey))
       tools.push(...composioTools.map((t) => tool(t.name ?? '', t.description ?? '', (t.parametersJsonSchema as Record<string, unknown>) ?? {})))
     } catch (err) {
-      log.error('[groqVoice] failed to load Composio tools:', err)
+      log.error('[geminiTurnVoice] failed to load Composio tools:', err)
     }
   }
 
@@ -849,7 +885,7 @@ async function executeVoiceTool(name: string, args: Record<string, unknown>): Pr
         // for screenshots. stripOldImages() on the next utterance demotes this once superseded.
         history.push({
           role: 'user',
-          content: [{ type: 'image_url', image_url: { url: `data:${doc.mimeType};base64,${doc.imageBase64}` } }]
+          parts: [{ inlineData: { mimeType: doc.mimeType ?? 'image/png', data: doc.imageBase64 } }]
         })
         return { status: 'SUCCESS', result: 'Image attached above — look at it directly.' }
       }

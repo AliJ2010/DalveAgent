@@ -101,7 +101,7 @@ export const skillsStore = new Proxy({} as SkillsStore, {
   }
 })
 
-// --- Recording state (shared across geminiLive.ts and groqVoice.ts's separate tool loops) ---
+// --- Recording state (shared across geminiLive.ts and geminiTurnVoice.ts's separate tool loops) ---
 
 let recording: SkillStep[] | null = null
 

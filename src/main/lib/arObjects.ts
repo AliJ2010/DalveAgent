@@ -1,6 +1,6 @@
 import type { BrowserWindow } from 'electron'
 import type { ArBlueprint } from '@shared/types'
-import { BUILTIN_BLUEPRINTS, sanitizeBlueprint } from '@shared/arBlueprints'
+import { BUILTIN_BLUEPRINTS, resolveBlueprintName, sanitizeBlueprint } from '@shared/arBlueprints'
 import * as handTracking from './handTracking'
 
 /**
@@ -41,8 +41,7 @@ function ensureCameraOn(): void {
 
 export function spawn(type: string): { status: 'SUCCESS' | 'FAILED'; message: string } {
   if (!win) return { status: 'FAILED', message: 'No window to render the object in.' }
-  const normalized = type.trim().toLowerCase()
-  const blueprint = BUILTIN_BLUEPRINTS[normalized]
+  const blueprint = resolveBlueprintName(type)
   if (!blueprint) {
     return {
       status: 'FAILED',
@@ -55,11 +54,16 @@ export function spawn(type: string): { status: 'SUCCESS' | 'FAILED'; message: st
   return { status: 'SUCCESS', message: describeSpawn(blueprint) }
 }
 
-/** Spawns an arbitrary AI-generated object description — always sanitized first (see
- *  sanitizeBlueprint), so a malformed or unexpected model response degrades to a plain labeled
- *  box instead of failing outright or building something broken. */
+/** Spawns an arbitrary AI-generated object description — but ALWAYS checks the curated preset
+ *  library first by the detected name (see resolveBlueprintName). Real reported failure: asked to
+ *  place a spoon, the freely-generated geometry for something this ordinary came out "super
+ *  random" — a name match against a hand-tuned preset is far more reliable than trusting a fresh
+ *  guess every time, so free generation (sanitizeBlueprint) is now only actually used for objects
+ *  that genuinely aren't in the library. A malformed or unexpected model response still degrades
+ *  to a plain labeled box instead of failing outright or building something broken. */
 export function spawnBlueprint(raw: unknown, fallbackName: string): { status: 'SUCCESS'; message: string } {
-  const blueprint: ArBlueprint = sanitizeBlueprint(raw, fallbackName)
+  const preset = resolveBlueprintName(fallbackName)
+  const blueprint: ArBlueprint = preset ?? sanitizeBlueprint(raw, fallbackName)
   ensureCameraOn()
   active = true
   win?.webContents.send('ar:spawn', blueprint)

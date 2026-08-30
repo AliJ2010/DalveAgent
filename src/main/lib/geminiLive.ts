@@ -75,13 +75,20 @@ function buildBlueprintPrompt(hint: string): string {
 
 Rules:
 - Coordinates are in meters, object roughly 0.5-2 units across, centered near the origin.
-- Every part needs a unique "id", a "shape" (box/cylinder/sphere), a "size" ([w,h,d] for box, [radiusTop,radiusBottom,height] for cylinder, [r,r,r] for sphere), a "position" (local, relative to its parent), and a hex "color".
+- Every part needs a unique "id", a "shape" (box/cylinder/sphere), a "size" ([w,h,d] for box, [radiusTop,radiusBottom,height] for cylinder, [radiusX,radiusY,radiusZ] for sphere — these three CAN differ, stretching it into an egg/flattened-disc/oval shape instead of only a uniform ball), a "position" (local, relative to its parent), and a hex "color".
 - Exactly one part must have role "body" — the main graspable/movable part. Give every other part a "parentId" naming another part's id; only the body itself should have no parent, since a real object is one connected structure.
 - If the real object has a hinged opening part (a door, lid, cabinet), set its role to "door" and give it a "hingeOffset" ([x,y,z]) for where its visual mesh sits relative to its own "position" (the hinge axis itself). If it has a handle for that door, give the handle role "handle" with parentId pointing at the door's id.
 - If it has a pressable button/switch, give it role "button".
 - Anything else (decorative, structural, non-interactive) gets role "static".
-- Keep it to 4-10 parts — simple and recognizable beats overly detailed.
-- Respond with ONLY the JSON object, no other text.`
+- Keep it to 4-10 parts — simple and recognizable beats overly detailed. Don't overthink simple objects: a spoon is just a thin cylinder handle plus a small flattened ellipsoid bowl, not a dozen fiddly parts.
+- Respond with ONLY the JSON object, no other text.
+
+Worked example, a spoon — note the flattened ellipsoid bowl (a sphere whose 3 size values differ), and that the handle (not the bowl) is the "body":
+{"name":"spoon","parts":[
+  {"id":"handle","shape":"cylinder","size":[0.045,0.055,0.85],"position":[0,-0.15,0],"color":"#c9c9c9","role":"body"},
+  {"id":"neck","shape":"cylinder","size":[0.055,0.075,0.15],"position":[0,0.35,0],"color":"#c9c9c9","role":"static"},
+  {"id":"bowl","shape":"sphere","size":[0.16,0.22,0.045],"position":[0,0.58,0],"color":"#d4d4d4","role":"static"}
+]}`
 }
 
 const CHAIN_OF_COMMAND = `Chain of command: the user is the ultimate authority over this entire system. DALVE is the primary orchestrator and answers directly to the user; every other agent answers to DALVE and, through her, to the user. Always defer to the user's explicit instructions over anything else.`
@@ -322,14 +329,15 @@ const STOP_HAND_TRACKING_TOOL: FunctionDeclaration = {
   parametersJsonSchema: { type: 'object', properties: {} }
 }
 
+const AR_PRESET_NAMES = 'microwave, lamp, chair, spoon, fork, cup, bottle, phone, book, ball'
+
 const SPAWN_AR_OBJECT_TOOL: FunctionDeclaration = {
   name: 'spawn_ar_object',
-  description:
-    'Places a manipulable 3D object into the live hand-tracking camera feed from a small built-in preset library — e.g. "put a microwave here". Turns the camera on by itself if it wasn\'t already. The user can grab and move it with a thumb+index pinch, pull its handle to open a door, press its buttons, pinch thumb+middle and drag to rotate it, or hold a 3-finger pinch and spread to resize it. Built-in presets: microwave, lamp, chair. For anything else, use look_and_place_object instead — that generates a real 3D shape for any object from a screenshot, not just these presets.',
+  description: `Places a manipulable 3D object into the live hand-tracking camera feed from a curated, hand-tuned preset library — e.g. "put a spoon here". These are more reliable than a freshly-generated shape, so prefer this over look_and_place_object whenever the requested object is in the list. Turns the camera on by itself if it wasn't already. The user can grab and move it with a thumb+index pinch, pull a handle to open a door where one exists, press buttons, pinch thumb+middle and drag to rotate it, or hold a grab and spread 3 fingers to resize it. Built-in presets: ${AR_PRESET_NAMES}. For anything else, use look_and_place_object instead.`,
   parametersJsonSchema: {
     type: 'object',
     properties: {
-      object_type: { type: 'string', description: 'One of the built-in presets: microwave, lamp, chair.' }
+      object_type: { type: 'string', description: `One of the built-in presets: ${AR_PRESET_NAMES}.` }
     },
     required: ['object_type']
   }
@@ -341,8 +349,7 @@ const REMOVE_AR_OBJECT_TOOL: FunctionDeclaration = {
 }
 const LOOK_AND_PLACE_OBJECT_TOOL: FunctionDeclaration = {
   name: 'look_and_place_object',
-  description:
-    'Takes a real screenshot of the user\'s screen, identifies the main real-world object shown in it (a photo of a chair, a product shot of a lamp, a diagram of some device — whatever is most prominent), and builds a real, manipulable 3D approximation of it into the live hand-tracking camera feed — genuinely unlimited object types, not limited to the small built-in preset list. Turns the camera on by itself if it wasn\'t already. Call this whenever the user asks you to look at their screen and put what you see into the camera/AR view, or asks for any object that is not one of spawn_ar_object\'s built-in presets (microwave, lamp, chair). The generated shape is a reasonable primitive-based approximation, not a photorealistic model — say so if asked, don\'t oversell it.',
+  description: `Takes a real screenshot of the user's screen, identifies the main real-world object shown in it (a photo, a product shot, a diagram — whatever is most prominent), and builds a real, manipulable 3D approximation of it into the live hand-tracking camera feed. If the detected object matches one of spawn_ar_object's presets (${AR_PRESET_NAMES}) that reliable preset is used automatically instead of a fresh guess — so this is safe to call even for a common object, you don't need to pre-check the list yourself. Turns the camera on by itself if it wasn't already. Call this whenever the user asks you to look at their screen and put what you see into the camera/AR view. For anything outside the preset list, the generated shape is a reasonable primitive-based approximation, not a photorealistic model — say so if asked, don't oversell it.`,
   parametersJsonSchema: {
     type: 'object',
     properties: {
@@ -374,7 +381,7 @@ const START_RECORDING_SKILL_TOOL: FunctionDeclaration = {
 const STOP_RECORDING_SKILL_TOOL: FunctionDeclaration = {
   name: 'stop_recording_skill',
   description:
-    'Stops recording and saves everything done since start_recording_skill as a named skill. Replaying a saved skill (run_skill) is only available on the Groq+ElevenLabs voice engine right now, not here — if the user wants to replay one immediately, tell them plainly they need to switch engines in Settings first.',
+    'Stops recording and saves everything done since start_recording_skill as a named skill. Replaying a saved skill (run_skill) is only available on the Gemini (Turn-Based) voice engine right now, not here — if the user wants to replay one immediately, tell them plainly they need to switch engines in Settings first.',
   parametersJsonSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] }
 }
 const LIST_SKILLS_TOOL: FunctionDeclaration = {
@@ -905,8 +912,8 @@ export async function startVoiceSession(
   // Real bug fixed here: this used to unconditionally read settingsStore.getDalveMemory() even
   // when a companion/bot agent was active — remember_fact genuinely wrote to agent.memory in that
   // case (see the 'remember_fact' tool handler below) but nothing ever read it back into the
-  // system prompt, a dead write with no matching read. groqVoice.ts's buildSystemPrompt already
-  // had this fixed and its own comment claimed geminiLive.ts mirrored it — it didn't. Framed as a
+  // system prompt, a dead write with no matching read (the engine this replaced had this fixed
+  // already, and its own comment wrongly claimed geminiLive.ts mirrored it — it didn't). Framed as a
   // BINDING instruction, not a passive fact, and phrased to explicitly call out that it overrides
   // this model's own native conversational habits — a plain "things to remember" bullet list was
   // shown live to lose out to the live-audio model's built-in tendency to end turns with a

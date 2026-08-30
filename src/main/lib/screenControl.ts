@@ -77,9 +77,10 @@ export function getFrameSize(): { width: number; height: number } {
 }
 
 /** Captures a single screenshot of the primary monitor as base64 JPEG. `maxWidth`, if given,
- *  downscales before encoding — a real, confirmed need for the Groq voice engine: a full native-
- *  resolution screenshot (e.g. a 1440p+ display) alone was enough to blow past Groq's free-tier
- *  8,000 tokens/minute limit for its vision model in a single request. */
+ *  downscales before encoding — a real, confirmed need for the turn-based voice engine
+ *  (geminiTurnVoice.ts): a full native-resolution screenshot (e.g. a 1440p+ display) alone was
+ *  enough to meaningfully eat into a free-tier vision model's per-minute token budget on the
+ *  Groq-backed engine this replaced, and stays cheap discipline now on Gemini's own budget. */
 export async function captureScreenshotOnce(quality = 88, maxWidth?: number): Promise<string | null> {
   const display = primaryDisplay()
   const width = Math.round(display.bounds.width * display.scaleFactor)

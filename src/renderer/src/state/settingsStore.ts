@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { BuiltinWakeWord, ComposioCatalogEntry, DalveTone, SettingsState } from '@shared/types'
+import type { BuiltinWakeWord, ComposioCatalogEntry, DalveTone, SettingsState, VoiceEngine } from '@shared/types'
 
 interface SettingsStoreState {
   settings: SettingsState | null
@@ -8,12 +8,11 @@ interface SettingsStoreState {
   setGeminiKey: (key: string) => Promise<void>
   setAnthropicKey: (key: string) => Promise<void>
   setTelegramBotToken: (token: string) => Promise<void>
-  setGroqKey: (key: string) => Promise<void>
   setElevenLabsKey: (key: string) => Promise<void>
   setElevenLabsVoice: (voiceId: string, voiceName: string) => Promise<void>
   addElevenLabsCustomVoice: (voiceId: string, name: string) => Promise<void>
   removeElevenLabsCustomVoice: (voiceId: string) => Promise<void>
-  setVoiceEngine: (engine: 'gemini' | 'groq') => Promise<void>
+  setVoiceEngine: (engine: VoiceEngine) => Promise<void>
   setDalveTone: (tone: DalveTone) => Promise<void>
   setPicovoiceAccessKey: (key: string) => Promise<void>
   setWakeWordEnabled: (enabled: boolean) => Promise<void>
@@ -76,11 +75,6 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
 
   setTelegramBotToken: async (token) => {
     const settings = await window.dalve.settings.setTelegramBotToken(token)
-    set({ settings })
-  },
-
-  setGroqKey: async (key) => {
-    const settings = await window.dalve.settings.setGroqKey(key)
     set({ settings })
   },
 
