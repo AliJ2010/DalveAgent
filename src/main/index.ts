@@ -26,6 +26,7 @@ import { attachWindow as attachAutonomousTaskWindow, stopAutonomousTask } from '
 import { attachWindow as attachAgentStoreWindow } from './lib/agentStore'
 import { attachWindow as attachSettingsStoreWindow } from './lib/settingsStore'
 import { attachWindow as attachHandTrackingWindow, stop as stopHandTracking } from './lib/handTracking'
+import { attachWindow as attachSteeringWheelWindow, stop as stopSteeringWheel } from './lib/steeringWheel'
 import { attachWindow as attachArObjectsWindow } from './lib/arObjects'
 import { attachWindow as attachSkillsStoreWindow } from './lib/skillsStore'
 import { attachWindow as attachScheduleStoreWindow } from './lib/scheduleStore'
@@ -87,6 +88,7 @@ function panicShutdown(): void {
   stopGeminiTurnVoiceSession()
   stopScreenControl()
   stopHandTracking()
+  stopSteeringWheel()
   stopAutonomousTask('privacy panic shutdown')
   wakeWord.stop()
   isQuitting = true
@@ -170,6 +172,7 @@ function createWindow(): void {
     stopGeminiTurnVoiceSession()
     stopScreenControl()
     stopHandTracking()
+    stopSteeringWheel()
     wakeWord.stop()
     mainWindow = null
   })
@@ -181,6 +184,7 @@ function createWindow(): void {
   attachAgentStoreWindow(mainWindow)
   attachSettingsStoreWindow(mainWindow)
   attachHandTrackingWindow(mainWindow)
+  attachSteeringWheelWindow(mainWindow)
   attachArObjectsWindow(mainWindow)
   attachSkillsStoreWindow(mainWindow)
   attachScheduleStoreWindow(mainWindow)

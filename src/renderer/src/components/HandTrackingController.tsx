@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { HandLandmarker, FilesetResolver, type NormalizedLandmark } from '@mediapipe/tasks-vision'
 import { Hand, Square, Move } from 'lucide-react'
 import { SpatialEngine } from '../spatial/spatialEngine'
-import type { ArBlueprint } from '@shared/types'
+import type { ArBlueprint, SteeringFrame } from '@shared/types'
 
 // Free-form panel geometry, not a fixed size-cycle — per direct request to "grow the camera as
 // much as I want and move it and put it where I want". The canvas's internal draw resolution stays
@@ -58,6 +58,8 @@ const MIDDLE_TIP = 12
 const RING_TIP = 16
 const PINKY_TIP = 20
 
+type Mode = 'cursor' | 'steering'
+
 function dist(a: NormalizedLandmark, b: NormalizedLandmark): number {
   const dx = a.x - b.x
   const dy = a.y - b.y
@@ -72,26 +74,39 @@ function computeSpread(hand: NormalizedLandmark[]): number {
   return tips.reduce((sum, i) => sum + dist(wrist, hand[i]), 0) / tips.length
 }
 
+function centroid(hand: NormalizedLandmark[]): { x: number; y: number } {
+  let sx = 0
+  let sy = 0
+  for (const p of hand) {
+    sx += p.x
+    sy += p.y
+  }
+  return { x: sx / hand.length, y: sy / hand.length }
+}
+
 /**
- * Webcam hand-tracking cursor — invisible until turned on by voice, then shows a live camera
- * preview with the tracked hand's skeleton drawn over it (purely for the user to see what DALVE
- * sees; all actual cursor/click/zoom decisions happen in the main process from the raw per-frame
- * geometry this sends over IPC). The same per-frame landmarks also drive an optional spatial AR
- * layer (see SpatialEngine) that composites a manipulable 3D object on top of this same feed —
- * one camera + one MediaPipe loop feeding two consumers, not two separate camera pipelines.
- * Camera capture and MediaPipe inference both have to happen here, not in the main process —
- * getUserMedia and WebAssembly vision models are browser-standard APIs with no main-process
- * equivalent in Electron.
+ * Webcam hand tracking, two modes sharing one camera+MediaPipe pipeline:
+ * - 'cursor' (default): one hand, index fingertip moves the OS cursor, pinches click/zoom — all
+ *   actual decisions happen in the main process from the raw per-frame geometry this sends over
+ *   IPC. The same per-frame landmarks also drive an optional spatial AR layer (SpatialEngine)
+ *   compositing a manipulable 3D object on this same feed.
+ * - 'steering': both hands, gripped like a wheel — see steeringWheel.ts for the actual gesture
+ *   policy (this component only reports each hand's mirrored centroid position, nothing more).
+ * MediaPipe's `numHands` is fixed at landmarker creation, not a runtime toggle, so switching modes
+ * disposes and recreates it rather than reusing one instance for both. Camera capture and
+ * MediaPipe inference both have to happen here, not in the main process — getUserMedia and
+ * WebAssembly vision models are browser-standard APIs with no main-process equivalent in Electron.
  */
 export function HandTrackingController(): React.JSX.Element {
   const [active, setActive] = useState(false)
+  const [mode, setMode] = useState<Mode>('cursor')
   const [error, setError] = useState<string | null>(null)
   const [panel, setPanel] = useState<PanelGeometry>(loadPanelGeometry)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const spatialContainerRef = useRef<HTMLDivElement | null>(null)
   const spatialEngineRef = useRef<SpatialEngine | null>(null)
-  const landmarkerRef = useRef<HandLandmarker | null>(null)
+  const landmarkerRef = useRef<{ instance: HandLandmarker; numHands: number } | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const rafRef = useRef<number | null>(null)
   const runningRef = useRef(false)
@@ -99,8 +114,10 @@ export function HandTrackingController(): React.JSX.Element {
   panelRef.current = panel
 
   useEffect(() => {
-    const unsubStart = window.dalve.handTracking.onStart(() => void startTracking())
+    const unsubStart = window.dalve.handTracking.onStart(() => void startTracking('cursor'))
     const unsubStop = window.dalve.handTracking.onStop(() => stopTracking())
+    const unsubSteerStart = window.dalve.steeringWheel.onStart(() => void startTracking('steering'))
+    const unsubSteerStop = window.dalve.steeringWheel.onStop(() => stopTracking())
     const unsubArSpawn = window.dalve.ar.onSpawn((blueprint) => {
       spatialEngineRef.current?.spawn(blueprint as ArBlueprint)
     })
@@ -110,6 +127,8 @@ export function HandTrackingController(): React.JSX.Element {
     return () => {
       unsubStart()
       unsubStop()
+      unsubSteerStart()
+      unsubSteerStop()
       unsubArSpawn()
       unsubArClear()
       stopTracking()
@@ -184,20 +203,27 @@ export function HandTrackingController(): React.JSX.Element {
     window.addEventListener('pointerup', onUp)
   }
 
-  async function ensureLandmarker(): Promise<HandLandmarker> {
-    if (landmarkerRef.current) return landmarkerRef.current
+  async function ensureLandmarker(numHands: number): Promise<HandLandmarker> {
+    if (landmarkerRef.current?.numHands === numHands) return landmarkerRef.current.instance
+    landmarkerRef.current?.instance.close()
+    landmarkerRef.current = null
     const vision = await FilesetResolver.forVisionTasks(WASM_BASE)
     const landmarker = await HandLandmarker.createFromOptions(vision, {
       baseOptions: { modelAssetPath: MODEL_URL },
       runningMode: 'VIDEO',
-      numHands: 1
+      numHands
     })
-    landmarkerRef.current = landmarker
+    landmarkerRef.current = { instance: landmarker, numHands }
     return landmarker
   }
 
-  async function startTracking(): Promise<void> {
+  async function startTracking(requestedMode: Mode): Promise<void> {
+    // Only one mode can own the camera/keyboard at a time — a steering-wheel request while
+    // cursor tracking is already running (or vice versa) cleanly hands off instead of running
+    // both gesture policies against the same frames.
+    if (runningRef.current) stopTracking()
     setError(null)
+    setMode(requestedMode)
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { width: CAPTURE_WIDTH, height: CAPTURE_HEIGHT }
@@ -209,15 +235,16 @@ export function HandTrackingController(): React.JSX.Element {
       await video.play()
       // A camera can die mid-session — permission revoked, device unplugged, OS reclaims it —
       // with nothing else here noticing. Without this, main process's "active" flag stays true
-      // forever after that, so a later "is hand tracking on" claim has no way to be honest.
+      // forever after that, so a later "is X tracking on" claim has no way to be honest.
       stream.getVideoTracks().forEach((track) => {
         track.onended = () => stopTracking()
       })
 
-      const landmarker = await ensureLandmarker()
+      const landmarker = await ensureLandmarker(requestedMode === 'steering' ? 2 : 1)
       runningRef.current = true
       setActive(true)
-      loop(landmarker, video)
+      if (requestedMode === 'steering') steeringLoop(landmarker, video)
+      else cursorLoop(landmarker, video)
     } catch (err) {
       console.error('[handTracking] failed to start:', err)
       setError(err instanceof Error ? err.message : 'Could not start the camera.')
@@ -225,7 +252,10 @@ export function HandTrackingController(): React.JSX.Element {
     }
   }
 
-  function drawPreview(hand: NormalizedLandmark[] | undefined, video: HTMLVideoElement, pinchIndex: number, pinchMiddle: number): void {
+  /** Draws the mirrored video frame plus a skeleton for every hand MediaPipe found this frame —
+   *  used by both modes; `pinch` (cursor mode only) highlights the exact fingertip a click would
+   *  register on, nothing steering mode needs. */
+  function drawPreview(hands: NormalizedLandmark[][], video: HTMLVideoElement, pinch?: { index: number; middle: number }): void {
     const canvas = canvasRef.current
     if (!canvas) return
     const ctx = canvas.getContext('2d')
@@ -240,7 +270,7 @@ export function HandTrackingController(): React.JSX.Element {
     ctx.scale(-1, 1)
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
 
-    if (hand) {
+    for (const hand of hands) {
       ctx.strokeStyle = 'rgba(212, 175, 55, 0.8)'
       ctx.lineWidth = 2
       for (const { start, end } of HandLandmarker.HAND_CONNECTIONS) {
@@ -253,10 +283,10 @@ export function HandTrackingController(): React.JSX.Element {
       }
       hand.forEach((pt, i) => {
         // Green when that finger's pinch is engaged — real visual confirmation of exactly when a
-        // click registers, not just a generic skeleton overlay.
+        // click registers, not just a generic skeleton overlay. Only meaningful in cursor mode.
         const isIndexTip = i === INDEX_TIP
         const isMiddleTip = i === MIDDLE_TIP
-        const engaged = (isIndexTip && pinchIndex < 0.06) || (isMiddleTip && pinchMiddle < 0.06)
+        const engaged = !!pinch && ((isIndexTip && pinch.index < 0.06) || (isMiddleTip && pinch.middle < 0.06))
         ctx.fillStyle = engaged ? '#6fe08a' : '#f2d06b'
         ctx.beginPath()
         ctx.arc(pt.x * canvas.width, pt.y * canvas.height, isIndexTip || isMiddleTip ? 5 : 3, 0, Math.PI * 2)
@@ -266,7 +296,7 @@ export function HandTrackingController(): React.JSX.Element {
     ctx.restore()
   }
 
-  function loop(landmarker: HandLandmarker, video: HTMLVideoElement): void {
+  function cursorLoop(landmarker: HandLandmarker, video: HTMLVideoElement): void {
     const detect = (): void => {
       if (!runningRef.current) return
       if (video.readyState >= 2) {
@@ -290,7 +320,38 @@ export function HandTrackingController(): React.JSX.Element {
           })
         }
         spatialEngineRef.current?.updateHand({ hand, pinchIndex, pinchMiddle, spread })
-        drawPreview(hand, video, pinchIndex, pinchMiddle)
+        drawPreview(hand ? [hand] : [], video, { index: pinchIndex, middle: pinchMiddle })
+      }
+      rafRef.current = requestAnimationFrame(detect)
+    }
+    detect()
+  }
+
+  function steeringLoop(landmarker: HandLandmarker, video: HTMLVideoElement): void {
+    const detect = (): void => {
+      if (!runningRef.current) return
+      if (video.readyState >= 2) {
+        const result = landmarker.detectForVideo(video, performance.now())
+        const hands = result.landmarks
+        // Mirrored (1 - x) so "left"/"right" role assignment below matches how the user's own
+        // hands actually appear in the mirrored preview, not the raw unmirrored camera buffer —
+        // see SteeringFrame's doc comment for why this differs from HandFrame's convention.
+        const mirrored = hands.map((h) => {
+          const c = centroid(h)
+          return { x: 1 - c.x, y: c.y }
+        })
+        let frame: SteeringFrame = { left: null, right: null }
+        if (mirrored.length >= 2) {
+          // Whichever hand appears further left on screen IS the left side of the wheel — a
+          // physical two-hand grip doesn't cross over, so comparing current x each frame is a
+          // robust, simple stand-in for tracking "which physical hand is which" without needing
+          // MediaPipe's own handedness classifier (whose left/right convention under a mirrored
+          // selfie-style feed is a real source of confusion best avoided entirely).
+          const [a, b] = mirrored[0].x <= mirrored[1].x ? [mirrored[0], mirrored[1]] : [mirrored[1], mirrored[0]]
+          frame = { left: a, right: b }
+        }
+        window.dalve.steeringWheel.sendFrame(frame)
+        drawPreview(hands, video)
       }
       rafRef.current = requestAnimationFrame(detect)
     }
@@ -305,6 +366,11 @@ export function HandTrackingController(): React.JSX.Element {
     streamRef.current = null
     setActive(false)
   }
+
+  const banner =
+    mode === 'steering'
+      ? 'STEERING WHEEL TRACKING ACTIVE — GRIP BOTH HANDS LIKE A WHEEL: TURN TO STEER, RAISE/LOWER TO GO FORWARD/REVERSE, SNAP TO DRIFT'
+      : 'HAND TRACKING ACTIVE — PINCH THUMB+INDEX TO CLICK (HOLD TO DRAG), THUMB+MIDDLE TO RIGHT-CLICK'
 
   return (
     <>
@@ -330,13 +396,11 @@ export function HandTrackingController(): React.JSX.Element {
         >
           <Hand size={14} color={error ? '#e05a5a' : 'var(--c-gold-bright)'} />
           <span className="tracked-label" style={{ color: 'var(--c-text-1)', fontSize: 11 }}>
-            {error
-              ? `HAND TRACKING FAILED: ${error}`
-              : 'HAND TRACKING ACTIVE — PINCH THUMB+INDEX TO CLICK (HOLD TO DRAG), THUMB+MIDDLE TO RIGHT-CLICK'}
+            {error ? `HAND TRACKING FAILED: ${error}` : banner}
           </span>
           {active && (
             <button
-              onClick={() => void window.dalve.handTracking.stop()}
+              onClick={() => void (mode === 'steering' ? window.dalve.steeringWheel.stop() : window.dalve.handTracking.stop())}
               className="tracked-label"
               style={{
                 display: 'flex',

@@ -15,6 +15,7 @@ import * as gridTargeting from './gridTargeting'
 import * as browserControl from './browserControl'
 import * as autonomousTask from './autonomousTask'
 import * as handTracking from './handTracking'
+import * as steeringWheel from './steeringWheel'
 import * as mcpClient from './mcpClient'
 import { skillsStore as skillsDb, isRecording, startRecording, stopRecording, recordStep, SKILL_META_TOOLS } from './skillsStore'
 import { createReminderTool, listRemindersTool, cancelReminderTool } from './scheduleStore'
@@ -574,6 +575,8 @@ const STATIC_TOOLS: FunctionDeclaration[] = [
   }),
   tool('start_hand_tracking', "Turns on the webcam, tracks the user's hand as a real cursor (index finger moves it, thumb+index pinch clicks).", { type: 'object', properties: {} }),
   tool('stop_hand_tracking', 'Turns off hand tracking and releases the webcam.', { type: 'object', properties: {} }),
+  tool('start_steering_wheel_tracking', 'Turns on the webcam and tracks BOTH hands as a virtual steering wheel for keyboard-controlled games: grip both hands like holding a wheel, turn to steer (A/D), raise/lower to go forward/reverse (W/S), snap hard to one side and hold the turn to drift that direction (Space+A/D). Starting this stops plain cursor tracking, and vice versa.', { type: 'object', properties: {} }),
+  tool('stop_steering_wheel_tracking', 'Turns off steering-wheel tracking and releases the webcam.', { type: 'object', properties: {} }),
   tool('define_grid', 'Registers the pixel boundary of a grid/board (chess, sudoku, spreadsheet) with no readable labels, for click_grid_cell to target precisely.', {
     type: 'object',
     properties: {
@@ -684,6 +687,14 @@ async function executeVoiceTool(name: string, args: Record<string, unknown>): Pr
     }
     case 'stop_hand_tracking': {
       const { status, message } = handTracking.stop()
+      return { status, result: message }
+    }
+    case 'start_steering_wheel_tracking': {
+      const { status, message } = steeringWheel.start()
+      return { status, result: message }
+    }
+    case 'stop_steering_wheel_tracking': {
+      const { status, message } = steeringWheel.stop()
       return { status, result: message }
     }
     case 'create_agent': {

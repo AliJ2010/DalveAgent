@@ -17,6 +17,7 @@ import * as appControl from './appControl'
 import * as windowLayout from './windowLayout'
 import * as priceAxis from './priceAxis'
 import * as handTracking from './handTracking'
+import * as steeringWheel from './steeringWheel'
 import * as arObjects from './arObjects'
 import * as mcpClient from './mcpClient'
 import { skillsStore as skillsDb, isRecording, startRecording, stopRecording, recordStep, SKILL_META_TOOLS } from './skillsStore'
@@ -326,6 +327,17 @@ const START_HAND_TRACKING_TOOL: FunctionDeclaration = {
 const STOP_HAND_TRACKING_TOOL: FunctionDeclaration = {
   name: 'stop_hand_tracking',
   description: 'Turns off hand tracking and releases the webcam.',
+  parametersJsonSchema: { type: 'object', properties: {} }
+}
+const START_STEERING_WHEEL_TRACKING_TOOL: FunctionDeclaration = {
+  name: 'start_steering_wheel_tracking',
+  description:
+    'Turns on the webcam and tracks BOTH hands as a virtual steering wheel for keyboard-controlled games: grip both hands closed like holding a wheel, turn it left/right to steer (A/D), raise or lower it to go forward/reverse (W/S), and snap it hard to one side to drift that direction, holding the turn to keep drifting (Space + A/D). A different mode from single-hand cursor tracking — starting this stops that, and vice versa, since only one can use the camera/keyboard at a time. Call this when the user asks for steering-wheel or driving-game hand tracking specifically, not plain cursor control.',
+  parametersJsonSchema: { type: 'object', properties: {} }
+}
+const STOP_STEERING_WHEEL_TRACKING_TOOL: FunctionDeclaration = {
+  name: 'stop_steering_wheel_tracking',
+  description: 'Turns off steering-wheel tracking and releases the webcam.',
   parametersJsonSchema: { type: 'object', properties: {} }
 }
 
@@ -781,6 +793,8 @@ async function buildToolsForAgent(agent: AgentConfig | null): Promise<Tool[]> {
     OPEN_TRADING_SETUP_TOOL,
     START_HAND_TRACKING_TOOL,
     STOP_HAND_TRACKING_TOOL,
+    START_STEERING_WHEEL_TRACKING_TOOL,
+    STOP_STEERING_WHEEL_TRACKING_TOOL,
     SPAWN_AR_OBJECT_TOOL,
     REMOVE_AR_OBJECT_TOOL,
     LOOK_AND_PLACE_OBJECT_TOOL,
@@ -1193,6 +1207,12 @@ async function handleToolCalls(functionCalls: FunctionCall[]): Promise<void> {
         response = { status, result: message }
       } else if (fc.name === 'stop_hand_tracking') {
         const { status, message } = handTracking.stop()
+        response = { status, result: message }
+      } else if (fc.name === 'start_steering_wheel_tracking') {
+        const { status, message } = steeringWheel.start()
+        response = { status, result: message }
+      } else if (fc.name === 'stop_steering_wheel_tracking') {
+        const { status, message } = steeringWheel.stop()
         response = { status, result: message }
       } else if (fc.name === 'spawn_ar_object') {
         const { status, message } = arObjects.spawn(String(args.object_type ?? ''))

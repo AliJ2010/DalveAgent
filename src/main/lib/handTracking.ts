@@ -1,5 +1,6 @@
 import { screen, type BrowserWindow } from 'electron'
 import * as screenControl from './screenControl'
+import * as steeringWheel from './steeringWheel'
 import type { HandFrame } from '@shared/types'
 
 /**
@@ -106,6 +107,8 @@ export function isActive(): boolean {
 export function start(): { status: 'SUCCESS' | 'FAILED'; message: string } {
   if (!win) return { status: 'FAILED', message: 'No window to run the camera in.' }
   if (active) return { status: 'SUCCESS', message: 'Hand tracking is already on.' }
+  // Only one hand-tracking mode can own the camera and gesture policy at a time.
+  if (steeringWheel.isActive()) steeringWheel.stop()
   active = true
   smoothedX = null
   smoothedY = null

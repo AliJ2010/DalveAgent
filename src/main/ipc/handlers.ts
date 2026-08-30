@@ -11,10 +11,11 @@ import * as screenControl from '../lib/screenControl'
 import * as autonomousTask from '../lib/autonomousTask'
 import * as cloudSync from '../lib/cloudSync'
 import * as handTracking from '../lib/handTracking'
+import * as steeringWheel from '../lib/steeringWheel'
 import * as arObjects from '../lib/arObjects'
 import * as mcpClient from '../lib/mcpClient'
 import { scheduleStore } from '../lib/scheduleStore'
-import type { AgentConfig, BuiltinWakeWord, DalveTone, HandFrame, ScheduleItem, ScheduleRecurrence, VoiceEngine } from '@shared/types'
+import type { AgentConfig, BuiltinWakeWord, DalveTone, HandFrame, ScheduleItem, ScheduleRecurrence, SteeringFrame, VoiceEngine } from '@shared/types'
 
 export function registerIpcHandlers(): void {
   // Lets the UI show the real running version, e.g. to confirm an auto-update actually landed
@@ -351,6 +352,12 @@ export function registerIpcHandlers(): void {
     handTracking.onFrame(frame)
   })
   ipcMain.on('handTracking:rendererStopped', () => handTracking.reportStopped())
+
+  // --- Steering wheel gesture ---
+  ipcMain.handle('steeringWheel:stop', () => steeringWheel.stop())
+  ipcMain.on('steeringWheel:frame', (_e, frame: SteeringFrame) => {
+    steeringWheel.onFrame(frame)
+  })
 
   // --- Spatial AR objects ---
   ipcMain.handle('ar:clear', () => arObjects.clear())

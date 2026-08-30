@@ -12,6 +12,7 @@ import type {
   ScheduleRecurrence,
   ScreenControlEvent,
   SettingsState,
+  SteeringFrame,
   VoiceEngine,
   VoiceEvent
 } from '@shared/types'
@@ -200,6 +201,20 @@ const dalveApi = {
       const listener = (): void => callback()
       ipcRenderer.on('handTracking:stop', listener)
       return () => ipcRenderer.removeListener('handTracking:stop', listener)
+    }
+  },
+  steeringWheel: {
+    stop: (): Promise<{ status: 'SUCCESS'; message: string }> => ipcRenderer.invoke('steeringWheel:stop'),
+    sendFrame: (frame: SteeringFrame): void => ipcRenderer.send('steeringWheel:frame', frame),
+    onStart: (callback: () => void): (() => void) => {
+      const listener = (): void => callback()
+      ipcRenderer.on('steeringWheel:start', listener)
+      return () => ipcRenderer.removeListener('steeringWheel:start', listener)
+    },
+    onStop: (callback: () => void): (() => void) => {
+      const listener = (): void => callback()
+      ipcRenderer.on('steeringWheel:stop', listener)
+      return () => ipcRenderer.removeListener('steeringWheel:stop', listener)
     }
   },
   ar: {

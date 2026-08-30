@@ -160,6 +160,17 @@ export interface HandFrame {
   palmY: number
 }
 
+/** One frame of the two-fist "steering wheel" gesture — a fist centroid per hand, or null if that
+ *  hand isn't currently visible. Unlike HandFrame (raw unmirrored coordinates, mirrored later in
+ *  main process), these x values are ALREADY mirrored by the renderer before sending — steering
+ *  needs to assign "left"/"right" roles by comparing the two hands' x positions the same way the
+ *  mirrored preview visually shows them (smaller x = appears on the left), which only lines up
+ *  with the user's actual left/right hand once mirrored. y is unaffected by mirroring either way. */
+export interface SteeringFrame {
+  left: { x: number; y: number } | null
+  right: { x: number; y: number } | null
+}
+
 export type VoiceSessionState = 'idle' | 'listening' | 'speaking' | 'connecting' | 'error'
 
 export type VoiceEvent =

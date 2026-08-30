@@ -312,6 +312,20 @@ export function releaseMouseUp(button: 'left' | 'right' = 'left'): void {
   getRobot().mouseToggle('up', button)
 }
 
+/** Explicit key hold/release (not a tap) — what steeringWheel.ts needs: hold W/A/S/D/Space for as
+ *  long as the tracked gesture (wheel angle, hand height, a drift) says it should keep going, not
+ *  a single keyTap. Same "the user's own gesture is the actual actor" reasoning as the mouse
+ *  press/release and cursor functions above, so this isn't gated behind requireControl() either —
+ *  turning steering-wheel tracking on IS the user's explicit standing authorization for it, the
+ *  same way turning on hand-tracking cursor control already is for clicks. */
+export function holdKey(key: string): void {
+  getRobot().keyToggle(key.toLowerCase(), 'down')
+}
+
+export function releaseKey(key: string): void {
+  getRobot().keyToggle(key.toLowerCase(), 'up')
+}
+
 /**
  * Ctrl+scroll at the current cursor position — the standard cross-app zoom gesture (browsers,
  * most image/PDF viewers, many creative apps, Windows desktop icon size). Used by handTracking.ts
