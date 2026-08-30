@@ -135,23 +135,25 @@ export function VoiceView(): React.JSX.Element {
               WORKING{toolActiveLabel ? ` · ${formatActionLabel(toolActiveLabel)}` : ''}
             </div>
           )}
+        </div>
 
-          <div
-            className="tracked-label"
-            style={{
-              position: 'absolute',
-              bottom: -2,
-              left: '50%',
-              transform: 'translateX(-50%)',
-              fontSize: 9,
-              color: accent.hex,
-              letterSpacing: '0.3em',
-              transition: 'color 200ms ease',
-              whiteSpace: 'nowrap'
-            }}
-          >
-            {activeLabel}
-          </div>
+        {/* A normal flex child with the SAME `gap` as the switcher-to-orb spacing above, not an
+            absolutely-positioned overlay glued to the orb's bottom edge — that overlay's visual
+            gap depended on how much of the orb's own box the sphere actually fills, which shrank
+            along with the box when the orb's size dropped from 360 to 240, reading as "too close"
+            even though the offset itself never changed. This way switcher→orb and orb→label are
+            provably the same distance, not two different gap mechanisms that happen to look close. */}
+        <div
+          className="tracked-label"
+          style={{
+            fontSize: 9,
+            color: accent.hex,
+            letterSpacing: '0.3em',
+            transition: 'color 200ms ease',
+            whiteSpace: 'nowrap'
+          }}
+        >
+          {activeLabel}
         </div>
       </div>
     </div>

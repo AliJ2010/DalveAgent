@@ -81,8 +81,12 @@ const VERTEX_SHADER = /* glsl */ `
 
     vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
     // Depth-based size falloff (perspective) plus a bit of levitation from real audio amplitude —
-    // a real amplitude-driven visual, not volume-mapped-to-rotation-speed alone.
-    float sizeAudio = 1.0 + uAudioLevel * 0.6;
+    // a real amplitude-driven visual, not volume-mapped-to-rotation-speed alone. Free-floating
+    // particles also get bigger as they spread — the same point count scattered across a whole
+    // screen is inherently far sparser per unit area than packed into a small sphere, and at the
+    // original size that reads as "the orb disappeared" rather than "it exploded", especially for
+    // the ambient random burst nobody was expecting.
+    float sizeAudio = 1.0 + uAudioLevel * 0.6 + unbound * 0.9;
     // Calibrated against this engine's actual camera distance/sphere radius (confirmed visually —
     // the original constant here was copied from an unrelated scale and made every point ~500px
     // wide, blowing the whole additive-blended field out to solid white).
@@ -106,9 +110,10 @@ const FRAGMENT_SHADER = /* glsl */ `
     float core = smoothstep(0.5, 0.0, d);
     float glow = smoothstep(0.5, 0.15, d) * 0.6;
     float twinkle = 0.75 + 0.25 * sin(uTime * (1.5 + vTwinkle * 3.0) + vTwinkle * 20.0);
-    // Free-floating particles read as slightly dimmer/more atmospheric than the tight contained
-    // sphere, per the request that the unbound field feel coordinated but not overwhelming.
-    float freyDim = mix(1.0, 0.72, vFree);
+    // Only lightly dimmed (was 0.72 — noticeably darker) so a full-screen unbound burst reads as
+    // an obvious, deliberate effect rather than the orb quietly vanishing, especially for the
+    // random ambient trigger the user isn't expecting and has no other cue is even happening.
+    float freyDim = mix(1.0, 0.92, vFree);
     float brightness = (0.35 + vDepth * 0.65) * twinkle * freyDim;
     float alpha = (core + glow) * brightness;
     gl_FragColor = vec4(uColor, alpha);

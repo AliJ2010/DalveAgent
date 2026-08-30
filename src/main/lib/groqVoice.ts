@@ -151,6 +151,7 @@ export function stopVoiceSession(): void {
   activeAgentId = null
   history = []
   audioBuffer = []
+  lastScreenshotAttachedAt = 0
   screenControl.stopAll()
   emit({ type: 'state', state: 'idle' })
 }
@@ -307,6 +308,11 @@ function buildSystemPrompt(agent: AgentConfig | null): string {
 // it's ever added; stripOldImages/trimHistory keep old ones from piling up turn after turn.
 const SCREENSHOT_MAX_WIDTH = 1024
 const SCREENSHOT_QUALITY = 65
+// See the real per-turn token math in runTurn — this is the main lever that actually keeps quick
+// back-and-forth exchanges under the 8K/minute ceiling now that trimming tool count and history
+// alone wasn't enough (a real reported failure: rate-limited on a plain "Hello.").
+const SCREENSHOT_COOLDOWN_MS = 20_000
+let lastScreenshotAttachedAt = 0
 const MAX_HISTORY_MESSAGES = 12
 
 /** Keeps only the most recent screenshot in the whole conversation — every earlier one becomes a
@@ -350,13 +356,25 @@ function friendlyTurnError(raw: string): string {
 async function runTurn(userText: string): Promise<void> {
   try {
     const client = getClient()
-    const screenshot = await screenControl.captureScreenshotOnce(SCREENSHOT_QUALITY, SCREENSHOT_MAX_WIDTH)
+    // A screenshot costs a FLAT ~2048 input tokens on Groq's vision model regardless of
+    // resolution — real, confirmed cost, not something a smaller/lower-quality image reduces. On
+    // an 8,000-token-per-MINUTE budget, attaching one on every single turn (as this did before)
+    // means two or three quick back-and-forth exchanges inside the same minute alone burn well
+    // over half the whole budget on images nobody asked to have re-sent, before the system
+    // prompt, tools, or the actual conversation cost anything — confirmed the real cause of a
+    // rate limit hitting on a plain "Hello." A cooldown means a fast exchange only pays for a
+    // screenshot once, not once per turn; the screen context can be at most this many seconds
+    // stale, which is a real but minor trade-off against reliably getting a reply at all.
+    const now = Date.now()
+    const needsScreenshot = now - lastScreenshotAttachedAt > SCREENSHOT_COOLDOWN_MS
+    const screenshot = needsScreenshot ? await screenControl.captureScreenshotOnce(SCREENSHOT_QUALITY, SCREENSHOT_MAX_WIDTH) : null
     // Appended per-turn (not baked into the cached system message) so it's always accurate even
     // in a session that's been open for hours — needed for create_reminder to resolve relative
     // times ("tomorrow", "in an hour") correctly regardless of how long the session's been running.
     const content: ChatCompletionContentPart[] = [{ type: 'text', text: `${userText}\n\n[Current date/time: ${new Date().toString()}]` }]
     if (screenshot) {
       content.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${screenshot}` } })
+      lastScreenshotAttachedAt = now
     }
     // Defensive fallback only — startVoiceSession always seeds this now; kept in case this is
     // ever reached with no active session.
