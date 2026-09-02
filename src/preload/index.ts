@@ -21,7 +21,12 @@ const dalveApi = {
   app: {
     getVersion: (): Promise<string> => ipcRenderer.invoke('app:getVersion'),
     checkVersionUpdate: (): Promise<{ version: string; justUpdated: boolean; previousVersion?: string }> =>
-      ipcRenderer.invoke('app:checkVersionUpdate')
+      ipcRenderer.invoke('app:checkVersionUpdate'),
+    onDevStaleCode: (callback: (info: { local: string; remote: string }) => void): (() => void) => {
+      const listener = (_e: Electron.IpcRendererEvent, info: { local: string; remote: string }): void => callback(info)
+      ipcRenderer.on('dev:staleCode', listener)
+      return () => ipcRenderer.removeListener('dev:staleCode', listener)
+    }
   },
   settings: {
     get: (): Promise<SettingsState> => ipcRenderer.invoke('settings:get'),

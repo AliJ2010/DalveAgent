@@ -340,6 +340,12 @@ async function onSignedIn(): Promise<void> {
   agentStore.setDeleteListener((id) => void deleteAgentCloud(id))
   settingsStore.setChangeListener(() => void pushSettings())
 
+  // Real bug fixed here: syncJournalNow() was fully implemented (see below — a real merge, not
+  // an overwrite) but never actually called from anywhere, so the conversation journal never
+  // synced across devices regardless of sign-in state on either side. Session-start is exactly
+  // when its own doc comment says it's meant to run.
+  await syncJournalNow()
+
   // Bug cleanup (see KNOWN_BAD_SEED_FINGERPRINTS in agentStore.ts): the union-merge above may
   // have just pulled down stale seed-artifact agents from another device, or this device may
   // already have its own local ones. Listeners are wired above, so any removal here correctly

@@ -33,6 +33,7 @@ import { attachWindow as attachScheduleStoreWindow } from './lib/scheduleStore'
 import { startScheduler } from './lib/scheduler'
 import * as wakeWord from './lib/wakeWord'
 import { initAutoUpdate } from './lib/autoUpdate'
+import { attachWindow as attachDevStaleCheckWindow, checkDevStale } from './lib/devStaleCheck'
 import { initTelegramBridge } from './lib/telegramBridge'
 import { reconnectAll as reconnectMcpServers } from './lib/mcpClient'
 
@@ -188,6 +189,7 @@ function createWindow(): void {
   attachArObjectsWindow(mainWindow)
   attachSkillsStoreWindow(mainWindow)
   attachScheduleStoreWindow(mainWindow)
+  attachDevStaleCheckWindow(mainWindow)
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
@@ -254,6 +256,7 @@ if (gotSingleInstanceLock) {
     createWindow()
     createTray()
     initAutoUpdate()
+    void checkDevStale()
     initTelegramBridge()
     startScheduler()
     void reconnectMcpServers()

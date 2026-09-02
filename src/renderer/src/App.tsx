@@ -15,6 +15,7 @@ import { AutonomousTaskOverlay } from './components/AutonomousTaskOverlay'
 import { ActionTimeline } from './components/ActionTimeline'
 import { AuthScreen } from './components/AuthScreen'
 import { VersionPopup } from './components/VersionPopup'
+import { DevStaleBanner } from './components/DevStaleBanner'
 import { useUiStore } from './state/uiStore'
 import { useSettingsStore } from './state/settingsStore'
 import { useAgentsStore } from './state/agentsStore'
@@ -94,6 +95,7 @@ function App(): React.JSX.Element {
   return (
     <div style={{ display: 'flex', position: 'fixed', inset: 0, background: 'var(--c-void)' }}>
       <VersionPopup />
+      <DevStaleBanner />
       <HandTrackingController />
       <ScreenControlOverlay />
       <AutonomousTaskOverlay />
