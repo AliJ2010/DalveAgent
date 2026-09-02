@@ -96,10 +96,11 @@ export function VoiceView(): React.JSX.Element {
             {/* The proven, lag-free Canvas2D sphere — a real GPU/WebGL replacement was tried and
                 reverted after live testing: it lagged and its "explosion" either stayed confined
                 to a small square or, once expanded, was too sparse/dim to visibly register. This
-                keeps the same particle-sphere identity and adds a "busy" scattered look via the
-                same cheap per-point loop instead (see ParticleSphere's `busy` prop). */}
+                keeps the same particle-sphere identity: a "busy" state now genuinely explodes
+                across the whole app (ParticleSphere relocates its own canvas via a portal, sized
+                to the real viewport) using the same cheap per-point loop, no WebGL involved. */}
             <ParticleSphere
-              size={240}
+              size={300}
               state={sessionState}
               color={sphereColor}
               pointCount={520}
