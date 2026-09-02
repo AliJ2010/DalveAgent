@@ -96,6 +96,13 @@ export interface SyncableSettings {
   mcpServers: StoredSecrets['mcpServers']
   dalveVoice: string
   dalveMemory: string
+  // Real reported gap: "personal changes" (which voice engine, which tone) weren't carrying over
+  // to the Mac — both are pure preference with no device-specific data in them (unlike wake-word
+  // settings, which stay local since a custom keyword file path only means something on the
+  // device that has that file). Needs the settings table's voice_engine/dalve_tone columns to
+  // already exist — added via a migration the user ran directly, not something this app creates.
+  voiceEngine: VoiceEngine
+  dalveTone: DalveTone
   geminiApiKey?: string
   anthropicApiKey?: string
   composioApiKey?: string
@@ -136,6 +143,8 @@ class SettingsStore {
       this.data.mcpServers = remote.mcpServers
       this.data.dalveVoice = remote.dalveVoice
       this.data.dalveMemory = remote.dalveMemory
+      this.data.voiceEngine = remote.voiceEngine
+      this.data.dalveTone = remote.dalveTone
       if (remote.geminiApiKey) this.data.geminiApiKey = encrypt(remote.geminiApiKey)
       if (remote.anthropicApiKey) this.data.anthropicApiKey = encrypt(remote.anthropicApiKey)
       if (remote.composioApiKey) this.data.composioApiKey = encrypt(remote.composioApiKey)

@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, isSupabaseConfigured } from '@shared/s
 import { agentStore } from './agentStore'
 import { settingsStore } from './settingsStore'
 import * as journal from './journal'
-import type { AgentConfig } from '@shared/types'
+import type { AgentConfig, DalveTone, VoiceEngine } from '@shared/types'
 
 let client: SupabaseClient | null = null
 let channel: RealtimeChannel | null = null
@@ -230,6 +230,8 @@ async function pushSettings(): Promise<void> {
       mcp_servers: s.mcpServers,
       dalve_voice: s.dalveVoice,
       dalve_memory: s.dalveMemory,
+      voice_engine: s.voiceEngine,
+      dalve_tone: s.dalveTone,
       // Plaintext in the cloud row (RLS-protected, same as every other row) so a key entered on
       // one device shows up "set" on every other device signed into this account.
       gemini_api_key: settingsStore.getGeminiApiKey() ?? null,
@@ -325,6 +327,10 @@ async function onSignedIn(): Promise<void> {
       mcpServers: cloudSettings.mcp_servers ?? [],
       dalveVoice: cloudSettings.dalve_voice,
       dalveMemory: mergedMemoryLines.join('\n'),
+      // A cloud row written before the voice_engine/dalve_tone migration has these as null —
+      // fall back to whatever's already local rather than clobbering a real preference with null.
+      voiceEngine: (cloudSettings.voice_engine as VoiceEngine) || settingsStore.getVoiceEngine(),
+      dalveTone: (cloudSettings.dalve_tone as DalveTone) || settingsStore.getDalveTone(),
       geminiApiKey: (cloudSettings.gemini_api_key as string) || settingsStore.getGeminiApiKey(),
       anthropicApiKey: (cloudSettings.anthropic_api_key as string) || settingsStore.getAnthropicApiKey(),
       composioApiKey: (cloudSettings.composio_api_key as string) || settingsStore.getComposioApiKey()
@@ -380,6 +386,8 @@ async function onSignedIn(): Promise<void> {
           mcpServers: (row.mcp_servers as never) ?? [],
           dalveVoice: row.dalve_voice as string,
           dalveMemory: (row.dalve_memory as string) ?? '',
+          voiceEngine: (row.voice_engine as VoiceEngine) || settingsStore.getVoiceEngine(),
+          dalveTone: (row.dalve_tone as DalveTone) || settingsStore.getDalveTone(),
           geminiApiKey: (row.gemini_api_key as string) || undefined,
           anthropicApiKey: (row.anthropic_api_key as string) || undefined,
           composioApiKey: (row.composio_api_key as string) || undefined

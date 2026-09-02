@@ -44,6 +44,11 @@ import { DALVE_TONE_PROMPTS } from '@shared/types'
 
 // Re-check https://ai.google.dev/gemini-api/docs/models before shipping — Google rotates these.
 const CHAT_MODEL = 'gemini-3.6-flash'
+// A separate, smaller model for the transcription-only step — free tier rate limits are per-model,
+// so splitting the two calls this engine makes per turn across two different models roughly
+// doubles the effective headroom instead of stacking both against CHAT_MODEL's own limit alone.
+// Still confirmed free (see ai.google.dev/gemini-api/docs/pricing).
+const TRANSCRIBE_MODEL = 'gemini-3.5-flash-lite'
 const ELEVENLABS_MODEL = 'eleven_flash_v2_5' // lowest-latency ElevenLabs model, meant for real-time use
 const SAMPLE_RATE = 16000 // matches audioCapture.ts's fixed capture rate
 
@@ -257,7 +262,7 @@ async function handleUtterance(pcm16: Buffer): Promise<void> {
     // turn's history as clean text rather than re-sending raw audio in every subsequent request
     // for the rest of the conversation.
     const result = await client.models.generateContent({
-      model: CHAT_MODEL,
+      model: TRANSCRIBE_MODEL,
       contents: [
         {
           role: 'user',
